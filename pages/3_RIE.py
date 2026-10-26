@@ -193,7 +193,7 @@ nonzero = valid_payment & monthly_rate.gt(0)
 zero = valid_payment & monthly_rate.eq(0)
 payment.loc[nonzero] = principal.loc[nonzero] * monthly_rate.loc[nonzero] / (1 - (1 + monthly_rate.loc[nonzero]) ** (-term_months))
 payment.loc[zero] = principal.loc[zero] / term_months
-income = field("IngresoTotalMensual")
+income = field("ingresos")
 pti = payment.div(income.where(income > 0)).mul(100)
 dti = (payment + field("ValorCuotaSectorTelcos")).div(income.where(income > 0)).mul(100)
 ei = principal.div(income.where(income > 0))
@@ -203,17 +203,17 @@ if indicator == "EI":
     defaults_min, defaults_max = [0,12,18], [12,18,1000000]
     scores = [2,1,0]
     unit = "Veces"
-    description = "EI = Valor a financiar / IngresoTotalMensual"
+    description = "EI = Valor a financiar / ingresos"
 elif indicator == "PTI":
     defaults_min, defaults_max = [0,30,40,50], [30,40,50,1000]
     scores = [0,1,2,3]
     unit = "%"
-    description = "PTI = Cuota mensual calculada / IngresoTotalMensual × 100"
+    description = "PTI = Cuota mensual calculada / ingresos × 100"
 else:
     defaults_min, defaults_max = [0,30,40,50], [30,40,50,1000]
     scores = [0,1,2,3]
     unit = "%"
-    description = "DTI = (Cuota mensual calculada + ValorCuotaSectorTelcos) / IngresoTotalMensual × 100"
+    description = "DTI = (Cuota mensual calculada + ValorCuotaSectorTelcos) / ingresos × 100"
 with st.container(border=True):
     left, center, right = st.columns([1.05,1.55,.72], gap="medium")
     with left:
