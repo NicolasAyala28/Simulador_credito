@@ -15,7 +15,7 @@ La identidad visual está centralizada en `src/theme.py` y `.streamlit/config.to
 
 ## Matrices
 
-- **Score:** Acierta vs. Frank, con deciles 0–1000, matriz principal editable, restablecimiento y guardado local.
+- **Perfil:** segmento vs. días de mora en franjas de 30 días (0-30, 30-60, 60-90, 90-120, 120+), con matriz principal editable (provisionalmente todas las celdas en AE), restablecimiento y guardado local.
 - **Exposición:** cuota inicial vs. valor del vehículo, con matriz editable por deciles de la población.
 - **Riesgo:** estructura editable de categorización 1–7.
 - Las matrices de concentración muestran la proporción de registros por combinación de deciles. La matriz condicionada queda preparada visualmente, sin aplicar filtros ni inventar una regla de negocio mientras esta no se defina.

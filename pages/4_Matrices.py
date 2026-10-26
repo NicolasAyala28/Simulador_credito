@@ -6,42 +6,28 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.data_loader import load_data, prepare_data, ROOT
+from src.data_loader import load_data, load_segmentacion, prepare_data, ROOT
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Matrices", page_icon="▦", layout="wide")
 apply_finanzauto_theme()
 
 DATA = prepare_data(load_data()).reset_index(drop=True)
-# Variable aleatoria dicotómica reproducible sobre la base completa, antes de filtrar perfil.
-# Así cada registro conserva el mismo 0/1 aunque el usuario cambie de perfil.
-_rng_condition = np.random.default_rng(20261013)
-DATA["condicion_aleatoria"] = _rng_condition.integers(0, 2, size=len(DATA))
 MATRIX_DIR = ROOT / "config" / "matrices"
 MATRIX_DIR.mkdir(parents=True, exist_ok=True)
 
 TEXT = "#0A2F4A"
 CATEGORIES = ["AA", "A", "AE"]
+MORA_THRESHOLDS = [60, 90]
 CATEGORY_COLORS = {"AA": "#68D39A", "A": "#FFD65B", "AE": "#FF7373"}
 CATEGORY_BG = {"AA": "#EAF8F0", "A": "#FFF9E4", "AE": "#FFF0F0"}
 
-# Matrices de la primera hoja del Excel: rangos y asignaciones tal como están definidos.
-SCORE_ACIERTA = ["0-430", "430-600", "600-675", "675-715", "715-740",
-                 "740-760", "760-780", "780-810", "810-840", "840-1000"]
-SCORE_FRANK = ["0-340", "340-470", "470-560", "560-635", "635-690",
-               "690-745", "745-790", "790-835", "835-885", "885-1000"]
-SCORE_RULES = [
-    ["AE","AE","AE","AE","AE","AE","AE","AE","AE","AE"],
-    ["AE","AE","AE","AE","AE","AE","AE","AE","AE","AE"],
-    ["AE","AE","AE","A","A","A","A","A","A","A"],
-    ["AE","AE","A","A","A","A","A","A","A","A"],
-    ["AE","AE","A","A","A","A","A","A","A","A"],
-    ["AE","AE","A","A","A","A","A","AA","AA","AA"],
-    ["AE","AE","A","A","A","AA","AA","AA","AA","AA"],
-    ["AE","AE","A","A","A","AA","AA","AA","AA","AA"],
-    ["AE","A","A","A","AA","AA","AA","AA","AA","AA"],
-    ["AE","A","A","A","AA","AA","AA","AA","AA","AA"],
-]
+# Matriz de perfil: filas segmentos, columnas días de mora en franjas de 30.
+PERFIL_SEGMENTS = sorted(set(load_segmentacion().values()))
+MORA_BANDS = ["0-30", "30-60", "60-90", "90-120", "120+"]
+MORA_EDGES = [0, 30, 60, 90, 120, np.inf]
+# Asignación provisional: todas las celdas en AE hasta definir la regla de negocio.
+PERFIL_RULES = [["AE"] * len(MORA_BANDS) for _ in PERFIL_SEGMENTS]
 # Exposición: filas cuota inicial (%), columnas valor del vehículo en millones.
 EXPOS_ROWS = ["0%-10%", "10%-20%", "20%-30%", "30%-40%", "40%-50%", "50%-70%", ">70%"]
 EXPOS_PARTICULAR_COLS = ["≤60 M", "60-85 M", "85-120 M", "120-170 M", ">170 M"]
@@ -93,16 +79,6 @@ def matrix_frame(rows, cols, rules, row_name):
     result.insert(0, row_name, rows)
     return result
 
-def edges_from_labels(labels):
-    edges = [float(x.split("-")[0]) for x in labels]
-    edges.append(float(labels[-1].split("-")[1]))
-    return edges
-
-def bin_numeric(series, labels):
-    edges = edges_from_labels(labels)
-    values = pd.to_numeric(series, errors="coerce")
-    return pd.cut(values, bins=edges, labels=labels, include_lowest=True, right=True, ordered=True)
-
 def bin_exposure(series, thresholds, labels):
     values = pd.to_numeric(series, errors="coerce")
     return pd.cut(values, bins=thresholds, labels=labels, include_lowest=True, right=True, ordered=True)
@@ -110,12 +86,12 @@ def bin_exposure(series, thresholds, labels):
 def format_int(n):
     return f"{int(n):,}".replace(",", ".")
 
-def assign_score_category(data, matrix):
+def assign_perfil_category(data, matrix):
     out = data.copy()
-    out["_row_bin"] = bin_numeric(out["acierta"], SCORE_ACIERTA)
-    out["_col_bin"] = bin_numeric(out["Frank"], SCORE_FRANK)
-    lookup = {(str(r["Acierta (filas)"]), str(c)): str(r[c])
-              for _, r in matrix.iterrows() for c in SCORE_FRANK}
+    out["_row_bin"] = out["segmentacion"].where(out["segmentacion"].isin(PERFIL_SEGMENTS))
+    out["_col_bin"] = bin_exposure(out["numero_dias_mora"], MORA_EDGES, MORA_BANDS)
+    lookup = {(str(r["Segmento"]), str(c)): str(r[c])
+              for _, r in matrix.iterrows() for c in MORA_BANDS}
     out["categoria_matriz"] = [
         lookup.get((str(row), str(col))) if pd.notna(row) and pd.notna(col) else None
         for row, col in zip(out["_row_bin"], out["_col_bin"])
@@ -210,7 +186,7 @@ def render_matrix_editor(default, key, row_name, columns, height=350):
 st.markdown("""
 <div class="fa-hero" style="padding:17px 24px;min-height:0;margin-bottom:12px">
   <div class="eyebrow">Finanzauto · Motor de decisión</div>
-  <h1 style="font-size:27px">Matrices de score, exposición y riesgo</h1>
+  <h1 style="font-size:27px">Matrices de perfil, exposición y riesgo</h1>
   <p>Configuración basada en la hoja «Matrices» del archivo asignacion_decision.xlsx.</p>
 </div>
 """,unsafe_allow_html=True)
@@ -221,34 +197,43 @@ valid_profile_mask = profiles.notna() & ~profiles.str.casefold().isin(invalid_pr
 DATA = DATA[valid_profile_mask].copy()
 DATA["perfil_label"] = profiles[valid_profile_mask].astype(str)
 profile_options = sorted(DATA["perfil_label"].unique().tolist())
-selected_profile = st.selectbox("Perfil",["Todos"]+profile_options,key="matrices_profile_filter")
+c_profile,c_condition = st.columns(2,gap="medium")
+with c_profile:
+    selected_profile = st.selectbox("Perfil",["Todos"]+profile_options,key="matrices_profile_filter")
+with c_condition:
+    mora_days = st.radio("Condición: días de mora mayor a",MORA_THRESHOLDS,horizontal=True,
+        format_func=lambda d: f"{d} días",key="matrices_mora_condition")
+# Los créditos sin dato de mora no cumplen la condición.
+mora = pd.to_numeric(DATA.get("numero_dias_mora",pd.Series(np.nan,index=DATA.index)),errors="coerce")
+DATA["condicion_mora"] = mora.gt(mora_days).astype(int)
+CONDITION_TITLE = f"con condición (mora &gt; {mora_days} días)"
 DATA = DATA if selected_profile=="Todos" else DATA[DATA["perfil_label"]==selected_profile]
 profile_key = slug(selected_profile)
 
-tab_score,tab_exposure,tab_risk = st.tabs(["Score","Exposición","Riesgo"])
+tab_perfil,tab_exposure,tab_risk = st.tabs(["Perfil","Exposición","Riesgo"])
 
-with tab_score:
-    st.markdown('<div class="fa-section">Matriz principal: Acierta vs. Frank</div>',unsafe_allow_html=True)
-    st.caption("Rangos y categorías replicados de la primera hoja del Excel.")
-    score_default = matrix_frame(SCORE_ACIERTA,SCORE_FRANK,SCORE_RULES,"Acierta (filas)")
-    score_key = f"score__perfil_{profile_key}"
-    score_editor = render_matrix_editor(score_default,score_key,"Acierta (filas)",SCORE_FRANK,height=385)
+with tab_perfil:
+    st.markdown('<div class="fa-section">Matriz principal: segmento vs. días de mora</div>',unsafe_allow_html=True)
+    st.caption("Franjas de 30 días de mora (límite superior incluido). Los créditos sin dato de mora no se clasifican.")
+    perfil_default = matrix_frame(PERFIL_SEGMENTS,MORA_BANDS,PERFIL_RULES,"Segmento")
+    perfil_key = f"perfil__perfil_{profile_key}"
+    perfil_editor = render_matrix_editor(perfil_default,perfil_key,"Segmento",MORA_BANDS,height=210)
 
-    scored = assign_score_category(DATA,score_editor)
-    general = concentration_matrix(scored,"_row_bin","_col_bin",SCORE_ACIERTA,SCORE_FRANK)
-    conditioned = scored[scored["condicion_aleatoria"]==1]
-    conditional_grid = concentration_matrix(conditioned,"_row_bin","_col_bin",SCORE_ACIERTA,SCORE_FRANK)
+    profiled = assign_perfil_category(DATA,perfil_editor)
+    general = concentration_matrix(profiled,"_row_bin","_col_bin",PERFIL_SEGMENTS,MORA_BANDS)
+    conditioned = profiled[profiled["condicion_mora"]==1]
+    conditional_grid = concentration_matrix(conditioned,"_row_bin","_col_bin",PERFIL_SEGMENTS,MORA_BANDS)
     left,right = st.columns(2,gap="medium")
     with left:
         with st.container(border=True):
             st.markdown('<div class="fa-section">Matriz de concentración general</div>',unsafe_allow_html=True)
-            render_heatmap(general,f"score_general_{profile_key}")
-            show_cards(scored,f"score_general_cards_{profile_key}")
+            render_heatmap(general,f"perfil_general_{profile_key}",height=260)
+            show_cards(profiled,f"perfil_general_cards_{profile_key}")
     with right:
         with st.container(border=True):
-            st.markdown('<div class="fa-section">Matriz de concentración con condición (1)</div>',unsafe_allow_html=True)
-            render_heatmap(conditional_grid,f"score_condition_{profile_key}")
-            show_cards(conditioned,f"score_condition_cards_{profile_key}")
+            st.markdown(f'<div class="fa-section">Matriz de concentración {CONDITION_TITLE}</div>',unsafe_allow_html=True)
+            render_heatmap(conditional_grid,f"perfil_condition_{profile_key}",height=260)
+            show_cards(conditioned,f"perfil_condition_cards_{profile_key}")
 
 with tab_exposure:
     st.markdown('<div class="fa-section">Matriz principal: cuota inicial vs. valor del vehículo</div>',unsafe_allow_html=True)
@@ -262,7 +247,7 @@ with tab_exposure:
     exp_editor = render_matrix_editor(exp_default,exp_key,"Cuota inicial (%)",exp_cols,height=340)
     exposed = assign_exposure_category(DATA,exp_editor,license_type)
     exp_general = concentration_matrix(exposed,"_row_bin","_col_bin",EXPOS_ROWS,exp_cols)
-    exp_conditioned = exposed[exposed["condicion_aleatoria"]==1]
+    exp_conditioned = exposed[exposed["condicion_mora"]==1]
     exp_conditional = concentration_matrix(exp_conditioned,"_row_bin","_col_bin",EXPOS_ROWS,exp_cols)
     left,right = st.columns(2,gap="medium")
     with left:
@@ -272,7 +257,7 @@ with tab_exposure:
             show_cards(exposed,f"exposure_general_cards_{profile_key}_{slug(license_type)}")
     with right:
         with st.container(border=True):
-            st.markdown('<div class="fa-section">Matriz de concentración con condición (1)</div>',unsafe_allow_html=True)
+            st.markdown(f'<div class="fa-section">Matriz de concentración {CONDITION_TITLE}</div>',unsafe_allow_html=True)
             render_heatmap(exp_conditional,f"exposure_condition_{profile_key}_{slug(license_type)}",height=300)
             show_cards(exp_conditioned,f"exposure_condition_cards_{profile_key}_{slug(license_type)}")
 
@@ -303,7 +288,7 @@ with tab_risk:
         risk_data["categoria_matriz"]=risk_data["RIE"].map(lookup)
     else:
         # No inventamos el dato RIE: mostramos matriz y condición, y señalamos que falta en la base.
-        risk_data=pd.DataFrame(columns=["RIE","categoria_matriz","condicion_aleatoria"])
+        risk_data=pd.DataFrame(columns=["RIE","categoria_matriz","condicion_mora"])
     risk_summary = pd.DataFrame({"Categoría":CATEGORIES,
         "Cantidad":[int((risk_data.get("categoria_matriz",pd.Series(dtype=str))==c).sum()) for c in CATEGORIES]})
     left,right=st.columns(2,gap="medium")
@@ -314,8 +299,8 @@ with tab_risk:
             show_cards(risk_data,f"risk_general_cards_{profile_key}")
     with right:
         with st.container(border=True):
-            st.markdown('<div class="fa-section">Concentración con condición (1)</div>',unsafe_allow_html=True)
-            risk_conditioned=risk_data[risk_data.get("condicion_aleatoria",pd.Series(dtype=int))==1] if not risk_data.empty else risk_data
+            st.markdown(f'<div class="fa-section">Concentración {CONDITION_TITLE}</div>',unsafe_allow_html=True)
+            risk_conditioned=risk_data[risk_data.get("condicion_mora",pd.Series(dtype=int))==1] if not risk_data.empty else risk_data
             st.dataframe(pd.DataFrame({"Categoría":CATEGORIES,"Cantidad":[int((risk_conditioned.get("categoria_matriz",pd.Series(dtype=str))==c).sum()) for c in CATEGORIES]}),width="stretch",hide_index=True)
             show_cards(risk_conditioned,f"risk_condition_cards_{profile_key}")
             if "RIE" not in DATA.columns:

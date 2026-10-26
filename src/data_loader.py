@@ -76,6 +76,8 @@ def prepare_data(df):
         )
     else:
         df["segmentacion"] = "Sin perfil"
+    # Los registros sin ocupación no tienen perfil y se excluyen del análisis.
+    df = df[df["segmentacion"].ne("Sin dato")].copy()
     # Los gráficos segmentan por perfil_label, que corresponde a la segmentación.
     df["perfil_label"] = df["segmentacion"]
     return df
