@@ -380,7 +380,6 @@ for score in range(8):
         denominator = len(valid_subset)
         total_n += n
         total_denominator += denominator
-        row[f"Cantidad ({lic})"] = n
         row[f"% ({lic})"] = (n / denominator * 100) if denominator else 0.0
     row["Total"] = total_n
     row["% Total"] = (total_n / total_denominator * 100) if total_denominator else 0.0
@@ -391,12 +390,12 @@ particular_total = int(results.loc[results["Licencia"].eq("PAR"), "Puntaje"].not
 public_total = int(results.loc[results["Licencia"].eq("PUB"), "Puntaje"].notna().sum())
 all_total = particular_total + public_total
 result_rows.append({"Puntaje": "Total", "Normalización": "–", "Categoría": "–",
-    "Cantidad (Particular)": particular_total, "% (Particular)": 100.0 if particular_total else 0.0,
-    "Cantidad (Público)": public_total, "% (Público)": 100.0 if public_total else 0.0,
+    "% (Particular)": 100.0 if particular_total else 0.0,
+    "% (Público)": 100.0 if public_total else 0.0,
     "Total": all_total, "% Total": 100.0 if all_total else 0.0})
 
 st.markdown("**Resultado del RIE por puntaje y categoría**")
-st.caption("Cantidades y porcentajes calculados desde la base para el perfil seleccionado. Los registros sin puntaje calculable se excluyen de los denominadores.")
+st.caption("Porcentajes por licencia y total de registros calculados desde la base para el perfil seleccionado. Los registros sin puntaje calculable se excluyen de los denominadores.")
 result_table = pd.DataFrame(result_rows)
 # La fila Total mezcla etiquetas con números; homogeneizar estas columnas evita ArrowInvalid.
 result_table["Puntaje"] = result_table["Puntaje"].astype(str)
