@@ -156,3 +156,34 @@ def show_category_summary_cards(df, category_col, title="Concentración por cate
                 """.replace(",", "."),
                 unsafe_allow_html=True,
             )
+
+
+def financed_amount(df):
+    """Valor a financiar = ValorVh - MontoCtaInicial (solo con valor del vehículo positivo)."""
+    vehicle = pd.to_numeric(df["ValorVh"], errors="coerce")
+    down_payment = pd.to_numeric(df["MontoCtaInicial"], errors="coerce")
+    return (vehicle - down_payment).where(vehicle > 0)
+
+
+def monthly_payment(df, term_months):
+    """Cuota fija (sistema francés) con tasa_nominal mensual en %: PMT = P*r / (1-(1+r)^(-n)); con tasa cero, P/n."""
+    principal = financed_amount(df)
+    rate = pd.to_numeric(df["tasa_nominal"], errors="coerce") / 100.0
+    payment = pd.Series(np.nan, index=df.index, dtype=float)
+    valid = principal.notna() & (principal > 0) & rate.notna() & (rate >= 0)
+    nonzero = valid & rate.gt(0)
+    zero = valid & rate.eq(0)
+    payment.loc[nonzero] = principal.loc[nonzero] * rate.loc[nonzero] / (1 - (1 + rate.loc[nonzero]) ** (-term_months))
+    payment.loc[zero] = principal.loc[zero] / term_months
+    return payment
+
+
+def load_config(name):
+    with open(CONFIG_DIR / f"{name}.json", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_config(name, values):
+    with open(CONFIG_DIR / f"{name}.json", "w", encoding="utf-8") as f:
+        json.dump(values, f, ensure_ascii=False, indent=4)
+        f.write("\n")

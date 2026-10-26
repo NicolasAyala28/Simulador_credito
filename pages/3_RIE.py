@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.common import financed_amount, monthly_payment
 from src.data_loader import load_data, prepare_data
 from src.theme import apply_finanzauto_theme
 
@@ -184,15 +185,8 @@ with st.expander("Fórmula y parámetros de la cuota mensual", expanded=False):
     st.markdown("Donde:")
     st.markdown("- **C:** cuota mensual calculada.\n- **P:** valor a financiar = `ValorVh - MontoCtaInicial`.\n- **i:** tasa de interés mensual = `tasa_nominal / 100` (la tasa nominal de la base ya es mensual).\n- **n:** plazo en meses; por ahora, **60 meses por defecto**.")
     st.caption("La tasa_nominal se interpreta como tasa mensual. Si la tasa es 0 %, la cuota se calcula como P / n. El plazo se mantiene editable durante esta etapa y se reemplazará por la variable del conjunto de datos cuando esté disponible.")
-principal = (field("ValorVh") - field("MontoCtaInicial")).where(field("ValorVh") > 0)
-monthly_rate = field("tasa_nominal") / 100.0
-# PMT = P*r / (1-(1+r)^(-n)); para tasa cero, P/n.
-payment = pd.Series(np.nan, index=DATA.index, dtype=float)
-valid_payment = principal.notna() & (principal > 0) & monthly_rate.notna() & (monthly_rate >= 0)
-nonzero = valid_payment & monthly_rate.gt(0)
-zero = valid_payment & monthly_rate.eq(0)
-payment.loc[nonzero] = principal.loc[nonzero] * monthly_rate.loc[nonzero] / (1 - (1 + monthly_rate.loc[nonzero]) ** (-term_months))
-payment.loc[zero] = principal.loc[zero] / term_months
+principal = financed_amount(DATA)
+payment = monthly_payment(DATA, term_months)
 income = field("ingresos")
 pti = payment.div(income.where(income > 0)).mul(100)
 dti = (payment + field("ValorCuotaSectorTelcos")).div(income.where(income > 0)).mul(100)

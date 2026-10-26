@@ -31,7 +31,8 @@ cards = [
     ("02", "Distribución de variables", "Distribuciones numéricas y categóricas segmentadas por perfil."),
     ("03", "RIE", "Reglas de Respaldo, Ingresos y Experiencia con distribuciones y faltantes."),
     ("04", "Matrices", "Matriz principal editable y mapas de concentración general y condicionada."),
-    ("05", "Decisión", "Exploración de combinaciones de score, exposición y riesgo."),
+    ("05", "Mitigantes", "Avalistas y garantías que cumplen los criterios configurados."),
+    ("06", "Decisión", "Exploración de combinaciones de score, exposición y riesgo."),
 ]
 for i, (num, title, desc) in enumerate(cards):
     with cols[i % 3]:
@@ -45,6 +46,8 @@ for i, (num, title, desc) in enumerate(cards):
                 st.page_link("pages/2_Distribucion.py", label="Abrir módulo →")
             elif title == "Matrices":
                 st.page_link("pages/4_Matrices.py", label="Abrir módulo →")
+            elif title == "Mitigantes":
+                st.page_link("pages/5_Mitigantes.py", label="Abrir módulo →")
             else:
                 st.page_link("pages/7_Decision.py", label="Abrir módulo →")
 

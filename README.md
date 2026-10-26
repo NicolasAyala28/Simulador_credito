@@ -26,6 +26,17 @@ La identidad visual está centralizada en `src/theme.py` y `.streamlit/config.to
 Se agregó `pages/3_RIE.py` antes de Matrices. Incluye Respaldo (LTV), Ingresos (PTI, DTI y EI), Experiencia, distribuciones de densidad, tarjetas de registros sin información y rangos editables temporalmente durante la sesión. La cuota mensual se estima con la fórmula de amortización francesa usando `tasa_nominal` y un plazo predeterminado de **60 meses**. El plazo permanece editable temporalmente hasta incorporar la variable al conjunto de datos. Los umbrales de PTI/DTI deben validarse con la política antes de usar resultados operativos.
 # Simulador_credito
 
+## Página Mitigantes
+
+`pages/5_Mitigantes.py` evalúa avalistas y garantías con los criterios de `config/avalista.json` y `config/garantia.json`, que se pueden editar y guardar desde la página.
+
+- **Avalista:** cumple si su Acierta es mayor o igual a `acierta` y su capacidad de pago (`ingreso del avalista / cuota calculada`) es mayor o igual a `capacidad_pago`. El crédito queda mitigado si al menos uno de sus avalistas (hasta 3) cumple.
+- **Garantía:** el valor es `suma de las garantías idóneas (RPV1Valor–RPV3Valor) / valor a financiar`. El crédito queda mitigado si es mayor o igual a `valor`.
+- **Reglas fijas de la garantía (no editables):** es idónea solo si `RPVxPrendado = NO` y tiene máximo 10 años (año actual − `RPVxModelo`). Si falta el estado de prenda o el año modelo, no es idónea.
+- **Reglas fijas del avalista omitidas por ahora:** tipo de identificación igual a 1 (`AvalistaxAVId` coincide con la posición del avalista, no con el tipo de documento) y no residir en departamentos de exclusión (la base no trae la ubicación del avalista).
+- La cuota calculada es la misma de RIE (sistema francés, `tasa_nominal` mensual y plazo editable, 60 meses por defecto); la fórmula está en `src/common.py`.
+- El resumen muestra la mora máxima en 15 meses (> 60 y > 90 días) según el mitigante que cumple el crédito.
+
 ## Calidad de datos
 
 Las reglas acordadas en la auditoría se aplican en `clean_data` (`src/data_loader.py`), que usan todas las páginas a través de `prepare_data`:
