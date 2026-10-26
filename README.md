@@ -15,7 +15,7 @@ La identidad visual está centralizada en `src/theme.py` y `.streamlit/config.to
 
 ## Matrices
 
-- **Perfil:** segmento vs. días de mora en franjas de 30 días (0-30, 30-60, 60-90, 90-120, 120+), con matriz principal editable (provisionalmente todas las celdas en AE), restablecimiento y guardado local.
+- **Perfil:** segmento vs. mora máxima en 15 meses (`mora_max_15m`) en franjas de 30 días (0-30, 30-60, 60-90, 90-120, 120+), con matriz principal editable (provisionalmente todas las celdas en AE), restablecimiento y guardado local.
 - **Exposición:** cuota inicial vs. valor del vehículo, con matriz editable por deciles de la población.
 - **Riesgo:** estructura editable de categorización 1–7.
 - Las matrices de concentración muestran la proporción de registros por combinación de deciles. La matriz condicionada queda preparada visualmente, sin aplicar filtros ni inventar una regla de negocio mientras esta no se defina.
@@ -35,6 +35,9 @@ Las reglas acordadas en la auditoría se aplican en `clean_data` (`src/data_load
 - **Ingreso:** se usa `ingresos`. Solo se aceptan valores entre 1 y 100 millones mensuales; los demás (incluidos los valores en 0) se tratan como sin dato.
 - **Cuota sector telcos:** se usa `ValorCuotaSectorTelcos` (numérico, sin separadores).
 - **Columnas eliminadas:** `traslado` (constante), `IngresoTotalMensual` y `ValorCuotaCST` (reemplazadas por las anteriores).
+- **Mora:** se usa `mora_max_15m`, la mora máxima en los primeros 15 meses desde el desembolso (o hasta el corte si el crédito aún no los cumple), con `meses_observados` como meses efectivamente observados.
+- **Meses de vida:** `meses_vida` = meses entre el desembolso y la fecha de corte, que se infiere de la base (último mes observado). Es la base del filtro de antigüedad mínima en Matrices; no usa `meses_observados` porque este se reduce cuando el crédito se cancela antes de los 15 meses.
+- **Nombres de columnas:** `Frank`, `FGA`, `FrankDecision` y `PlanFinanciacion` se normalizan a esos nombres sin importar las mayúsculas con que lleguen.
 - El resto de valores (`acierta = 0`, `FechaAperturaMontoMax = 0001-01-01`, variables de buró) se toman tal como vienen en la base.
 
 Pendientes anotados:

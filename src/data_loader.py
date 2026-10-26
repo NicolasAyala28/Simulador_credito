@@ -6,6 +6,8 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "data_desembolsos_2024_2025.csv"
 SEGMENTACION_PATH = ROOT / "config" / "segmentacion.json"
+# Nombres canónicos de columnas que la fuente ha entregado con distinto uso de mayúsculas.
+CANONICAL_COLUMNS = ["Frank", "FGA", "FrankDecision", "PlanFinanciacion"]
 
 @st.cache_data(show_spinner=False)
 def load_data():
@@ -17,7 +19,8 @@ def load_data():
     else:
         df = pd.read_csv(DATA_PATH, sep=";", encoding="utf-8-sig", low_memory=False)
     df = df.loc[:, ~df.columns.astype(str).str.match(r"^Unnamed")]
-    return df
+    rename = {c: name for name in CANONICAL_COLUMNS for c in df.columns if c.casefold() == name.casefold()}
+    return df.rename(columns=rename)
 
 def _norm(value):
     return " ".join(str(value).split()).casefold()
@@ -63,6 +66,14 @@ def prepare_data(df):
     if "id_fecha_desembolso" in df.columns:
         raw = df["id_fecha_desembolso"].astype("string").str.replace(r"\.0$", "", regex=True)
         df["fecha_desembolso"] = pd.to_datetime(raw, format="%Y%m%d", errors="coerce")
+    if {"fecha_desembolso", "meses_observados"} <= set(df.columns):
+        # La fecha de corte no viene en la base: es el último mes observado de cualquier crédito.
+        mes_desembolso = df["fecha_desembolso"].dt.to_period("M")
+        observados = pd.to_numeric(df["meses_observados"], errors="coerce")
+        corte = (mes_desembolso + observados.fillna(0).astype(int)).max()
+        # Meses de vida desde el desembolso; a diferencia de meses_observados, no se reduce
+        # cuando el crédito se cancela antes de completar la ventana.
+        df["meses_vida"] = (corte - mes_desembolso).map(lambda d: d.n if pd.notna(d) else pd.NA).astype("Int64")
     if "mes_desem" in df.columns:
         df["mes_desem"] = pd.to_numeric(df["mes_desem"], errors="coerce").astype("Int64")
     if "licencia_vehiculo" in df.columns:

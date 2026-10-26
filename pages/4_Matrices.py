@@ -19,6 +19,8 @@ MATRIX_DIR.mkdir(parents=True, exist_ok=True)
 TEXT = "#0A2F4A"
 CATEGORIES = ["AA", "A", "AE"]
 MORA_THRESHOLDS = [60, 90]
+# Antigüedad mínima desde el desembolso (meses de vida) para comparar créditos maduros.
+MIN_AGE_OPTIONS = {"Todos": 0, "≥ 12 meses": 12, "≥ 15 meses": 15}
 CATEGORY_COLORS = {"AA": "#68D39A", "A": "#FFD65B", "AE": "#FF7373"}
 CATEGORY_BG = {"AA": "#EAF8F0", "A": "#FFF9E4", "AE": "#FFF0F0"}
 
@@ -89,7 +91,7 @@ def format_int(n):
 def assign_perfil_category(data, matrix):
     out = data.copy()
     out["_row_bin"] = out["segmentacion"].where(out["segmentacion"].isin(PERFIL_SEGMENTS))
-    out["_col_bin"] = bin_exposure(out["numero_dias_mora"], MORA_EDGES, MORA_BANDS)
+    out["_col_bin"] = bin_exposure(out["mora_max_15m"], MORA_EDGES, MORA_BANDS)
     lookup = {(str(r["Segmento"]), str(c)): str(r[c])
               for _, r in matrix.iterrows() for c in MORA_BANDS}
     out["categoria_matriz"] = [
@@ -197,14 +199,19 @@ valid_profile_mask = profiles.notna() & ~profiles.str.casefold().isin(invalid_pr
 DATA = DATA[valid_profile_mask].copy()
 DATA["perfil_label"] = profiles[valid_profile_mask].astype(str)
 profile_options = sorted(DATA["perfil_label"].unique().tolist())
-c_profile,c_condition = st.columns(2,gap="medium")
+c_profile,c_condition,c_age = st.columns(3,gap="medium")
 with c_profile:
     selected_profile = st.selectbox("Perfil",["Todos"]+profile_options,key="matrices_profile_filter")
 with c_condition:
     mora_days = st.radio("Condición: días de mora mayor a",MORA_THRESHOLDS,horizontal=True,
         format_func=lambda d: f"{d} días",key="matrices_mora_condition")
-# Los créditos sin dato de mora no cumplen la condición.
-mora = pd.to_numeric(DATA.get("numero_dias_mora",pd.Series(np.nan,index=DATA.index)),errors="coerce")
+with c_age:
+    min_age_label = st.radio("Antigüedad mínima",list(MIN_AGE_OPTIONS),horizontal=True,key="matrices_min_age",
+        help="Meses desde el desembolso hasta la fecha de corte. Los créditos cancelados antes se conservan.")
+if MIN_AGE_OPTIONS[min_age_label] and "meses_vida" in DATA:
+    DATA = DATA[DATA["meses_vida"].ge(MIN_AGE_OPTIONS[min_age_label]).fillna(False)]
+# Mora máxima en los primeros 15 meses (o hasta el corte si el crédito es más joven).
+mora = pd.to_numeric(DATA.get("mora_max_15m",pd.Series(np.nan,index=DATA.index)),errors="coerce")
 DATA["condicion_mora"] = mora.gt(mora_days).astype(int)
 CONDITION_TITLE = f"con condición (mora &gt; {mora_days} días)"
 DATA = DATA if selected_profile=="Todos" else DATA[DATA["perfil_label"]==selected_profile]
@@ -214,7 +221,7 @@ tab_perfil,tab_exposure,tab_risk = st.tabs(["Perfil","Exposición","Riesgo"])
 
 with tab_perfil:
     st.markdown('<div class="fa-section">Matriz principal: segmento vs. días de mora</div>',unsafe_allow_html=True)
-    st.caption("Franjas de 30 días de mora (límite superior incluido). Los créditos sin dato de mora no se clasifican.")
+    st.caption("Mora máxima en los primeros 15 meses (o hasta el corte), en franjas de 30 días con límite superior incluido.")
     perfil_default = matrix_frame(PERFIL_SEGMENTS,MORA_BANDS,PERFIL_RULES,"Segmento")
     perfil_key = f"perfil__perfil_{profile_key}"
     perfil_editor = render_matrix_editor(perfil_default,perfil_key,"Segmento",MORA_BANDS,height=210)
