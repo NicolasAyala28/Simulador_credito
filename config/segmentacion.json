@@ -1,16 +1,14 @@
 {
     "Transportador":"Transportador",
-
     "Empleado ENR":"Empleado",
     "Empleado ER":"Empleado",
+    "Empleado":"Empleado",
     "Independiente Informal":"Independiente Informal",
     "Comerciante":"Independiente Informal",
     "Agricultor":"Independiente Informal",
-    "Ama de Casa":"Independiente Informal",
-    "Universitario":"Independiente Informal",
+    "Ganadero":"Independiente Informal",
     "Independiente Formal":"Independiente Formal",
     "Contratista":"Independiente Formal",
-    "Pensionado":"Independiente Formal",
-    "Ganadero":"Independiente Formal",
+    "Pensionado":"Empleado",
     "Rentista de Capital":"Independiente Formal"
 }
