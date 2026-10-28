@@ -28,11 +28,11 @@ st.markdown('<div class="fa-section">Módulos del simulador</div>', unsafe_allow
 cols = st.columns(3, gap="medium")
 cards = [
     ("01", "Portada", "Periodo, población, primeras observaciones y calidad de datos."),
-    ("02", "Distribución de variables", "Distribuciones numéricas y categóricas segmentadas por perfil."),
+    ("02", "Distribución de variables", "Segmentos y ocupaciones, y gráficas de distribución por segmento."),
     ("03", "RIE", "Reglas de Respaldo, Ingresos y Experiencia con distribuciones y faltantes."),
-    ("04", "Matrices", "Matriz principal editable y mapas de concentración general y condicionada."),
+    ("04", "Árbol", "Segmento, RIE, licencia y condición con concentración de mora."),
     ("05", "Mitigantes", "Avalistas y garantías que cumplen los criterios configurados."),
-    ("06", "Decisión", "Exploración de combinaciones de score, exposición y riesgo."),
+    ("06", "Decisión", "Decisión final luego de mitigantes: total y por segmento."),
 ]
 for i, (num, title, desc) in enumerate(cards):
     with cols[i % 3]:
@@ -43,9 +43,10 @@ for i, (num, title, desc) in enumerate(cards):
             elif title == "Portada":
                 st.page_link("pages/1_Portada.py", label="Abrir módulo →")
             elif title == "Distribución de variables":
-                st.page_link("pages/2_Distribucion.py", label="Abrir módulo →")
-            elif title == "Matrices":
-                st.page_link("pages/4_Matrices.py", label="Abrir módulo →")
+                st.page_link("pages/2_Distribucion.py", label="Segmentos y ocupaciones →")
+                st.page_link("pages/2_Distribucion_graficas.py", label="Gráficas →")
+            elif title == "Árbol":
+                st.page_link("pages/4_Arbol.py", label="Abrir módulo →")
             elif title == "Mitigantes":
                 st.page_link("pages/5_Mitigantes.py", label="Abrir módulo →")
             else:

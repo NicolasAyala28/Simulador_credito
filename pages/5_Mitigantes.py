@@ -1,24 +1,20 @@
+import json
+
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
-from src.common import financed_amount, load_config, monthly_payment, save_config
+from src.common import load_config
 from src.data_loader import load_data, prepare_data
+from src.decision import (A_ESTUDIO, APROBADO, CONDICIONES, CONDICIONES_PATH, CONDICIONES_STATE,
+    GARANTIA_MAX_ANTIGUEDAD, GARANTIA_MIN_COBERTURA, RIE_ORDER, SEGMENT_ORDER, LICENSE_ORDER, CONDITION_ORDER,
+    TREE_LEVELS, arbol_decisions, branch_key, credit_mitigants, final_decisions, mitigante_conditions, read_json)
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Mitigantes", page_icon="◫", layout="wide")
 apply_finanzauto_theme()
 
-DATA = prepare_data(load_data()).reset_index(drop=True)
-GREEN = "#087A55"
-TEXT = "#0A2F4A"
-AVALISTAS = [1, 2, 3]
-GARANTIAS = [1, 2, 3]
-# Reglas fijas de idoneidad de la garantía (no editables).
-GARANTIA_MAX_ANTIGUEDAD = 10
-CURRENT_YEAR = pd.Timestamp.today().year
-GROUP_ORDER = ["Sin mitigante", "Solo avalista", "Solo garantía", "Avalista y garantía"]
+CUMPLE, NO_CUMPLE = "Decisión - Cumple", "Decisión - No cumple"
 
 def format_n(n):
     return f"{int(n):,}".replace(",", ".")
@@ -26,180 +22,112 @@ def format_n(n):
 def format_pct(part, total):
     return f"{part / total * 100:.1f}%" if total else "0.0%"
 
-def threshold_histogram(series, xlabel, threshold, key, x_max=None):
-    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-    total_values = len(values)
-    if x_max is not None:
-        values = values[values <= x_max]
-        note = f"{format_n(len(values))} de {format_n(total_values)} registros; {format_n(total_values - len(values))} mayores a {x_max:g} no se muestran."
-    else:
-        # Se recorta el 1 % superior para que los valores extremos no aplasten la distribución.
-        if len(values) > 20:
-            values = values[values <= values.quantile(.99)]
-        note = f"{format_n(len(values))} registros con valor calculable (sin el 1 % superior)."
-    bins = dict(xbins=dict(start=0, end=x_max, size=x_max / 40)) if x_max is not None else dict(nbinsx=40)
-    fig = go.Figure(go.Histogram(x=values, **bins, marker_color="#43BD83",
-        marker_line=dict(color=GREEN, width=0.4), opacity=0.9,
-        hovertemplate=f"{xlabel}: %{{x}}<br>Registros: %{{y}}<extra></extra>"))
-    fig.add_vline(x=threshold, line_width=1.5, line_dash="dash", line_color=TEXT,
-        annotation_text=f"Mínimo {threshold:g}", annotation_position="top")
-    fig.update_layout(height=270, margin=dict(l=8, r=8, t=30, b=35), showlegend=False,
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT, size=10),
-        xaxis=dict(title=xlabel, showgrid=False, range=[0, x_max] if x_max is not None else None),
-        yaxis=dict(title="Registros", gridcolor="#e5eee9"))
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key=key)
-    st.caption(note)
-
-def config_editor(name, fields):
-    """Campos editables de config/<name>.json; los cambios aplican en sesión hasta guardarlos."""
-    saved = load_config(name)
-    values = {}
-    for field, (label, kwargs) in fields.items():
-        values[field] = st.number_input(label, value=type(kwargs["step"])(saved[field]), key=f"mit_{name}_{field}", **kwargs)
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("Restablecer", key=f"mit_{name}_reset", width="stretch"):
-            for field in fields:
-                st.session_state.pop(f"mit_{name}_{field}", None)
-            st.rerun()
-    with b2:
-        if st.button("Guardar", key=f"mit_{name}_save", type="primary", width="stretch"):
-            save_config(name, values)
-            st.success(f"Valores guardados en config/{name}.json")
-    return values
-
 st.markdown("""
 <div class="fa-hero" style="padding:17px 24px;min-height:0;margin-bottom:12px">
   <div class="eyebrow">Finanzauto · Motor de decisión</div>
   <h1 style="font-size:27px">Mitigantes: avalistas y garantías</h1>
-  <p>Evalúa qué créditos cuentan con un avalista o una garantía que cumple los criterios definidos en config/avalista.json y config/garantia.json.</p>
+  <p>Créditos con avalistas y garantías idóneos, y cumplimiento de las ramas del árbol con decisión "Condiciones".</p>
 </div>
 """, unsafe_allow_html=True)
 
-profile_options = sorted(DATA["perfil_label"].dropna().astype(str).unique().tolist())
-c_profile, c_term = st.columns(2, gap="medium")
-with c_profile:
-    selected_profile = st.selectbox("Perfil", ["Todos"] + profile_options, key="mit_profile")
-with c_term:
-    # Mismo supuesto que en RIE: el plazo no viene en la base.
-    term_months = st.number_input("Plazo de financiación para la cuota (meses)", min_value=1, max_value=120,
-        value=60, step=1, key="mit_term_months")
-VIEW = DATA if selected_profile == "Todos" else DATA[DATA["perfil_label"].eq(selected_profile)]
-VIEW = VIEW.copy()
-VIEW["valor_financiar"] = financed_amount(VIEW)
-VIEW["cuota_calculada"] = monthly_payment(VIEW, term_months)
+# ---------------- Idoneidad por crédito ----------------
+aval_cfg = load_config("avalista")
+gar_cfg = load_config("garantia")
+DATA = credit_mitigants(prepare_data(load_data()).reset_index(drop=True), aval_cfg, gar_cfg)
+
+# ---------------- Tarjetas ----------------
+segment_options = ["Todos"] + [s for s in SEGMENT_ORDER if DATA["Segmento"].eq(s).any()]
+# Las tarjetas van antes del filtro pero dependen de él: se lee el valor elegido en la sesión.
+selected_segment = st.session_state.get("mit_segmento", "Todos")
+if selected_segment not in segment_options:
+    selected_segment = "Todos"
+VIEW = DATA if selected_segment == "Todos" else DATA[DATA["Segmento"].eq(selected_segment)]
 total = len(VIEW)
+cards = [
+    ("Créditos con avalista(s) idóneo(s)", VIEW["avalista_idoneo"]),
+    ("Créditos con garantía(s) idónea(s)", VIEW["garantia_idonea"]),
+    ("Créditos con avalista(s) y garantía(s) idóneos", VIEW["avalista_idoneo"] & VIEW["garantia_idonea"]),
+]
+for col, (label, mask) in zip(st.columns(3, gap="medium"), cards):
+    n = int(mask.sum())
+    col.metric(label, format_n(n), format_pct(n, total), delta_color="off", border=True)
+st.caption(f"Porcentajes sobre {format_n(total)} créditos del segmento seleccionado. "
+           f"Avalista idóneo: Acierta ≥ {aval_cfg['acierta']:g} y capacidad de pago (ingreso / cuota) ≥ "
+           f"{aval_cfg['capacidad_pago']:g}. Garantía idónea: no prendada, máximo {GARANTIA_MAX_ANTIGUEDAD} años y valor "
+           f"superior al {gar_cfg['valor'] * 100:g}% del valor del vehículo; el crédito la tiene si sus garantías idóneas "
+           f"suman más del {GARANTIA_MIN_COBERTURA * 100:g}% del valor a financiar (ValorVh − MontoCtaInicial).")
 
-# ---------------- Avalistas ----------------
-st.markdown('<div class="fa-section">Avalistas</div>', unsafe_allow_html=True)
-left, right = st.columns([1, 2.4], gap="medium")
-with left:
-    with st.container(border=True):
-        st.markdown("**Criterios del avalista**")
-        aval_cfg = config_editor("avalista", {
-            "acierta": ("Acierta mínimo", dict(min_value=0, max_value=1000, step=1)),
-            "capacidad_pago": ("Capacidad de pago mínima (ingreso / cuota)", dict(min_value=0.0, max_value=100.0, step=0.05, format="%.2f")),
-        })
-        st.caption("Capacidad de pago = ingreso del avalista / cuota calculada del crédito. "
-                   "Un avalista cumple si alcanza ambos mínimos; el crédito queda mitigado si al menos uno cumple.")
+# ---------------- Filtro ----------------
+st.selectbox("Segmento", segment_options, index=segment_options.index(selected_segment), key="mit_segmento")
 
-# Una fila por avalista registrado.
-aval_frames = []
-for i in AVALISTAS:
-    acierta = pd.to_numeric(VIEW[f"Avalista{i}Acierta"], errors="coerce")
-    income = pd.to_numeric(VIEW[f"Avalista{i}IngresoTotalMensual"].astype("string"), errors="coerce")
-    present = acierta.notna() | income.notna()
-    aval_frames.append(pd.DataFrame({
-        "credito_idx": VIEW.index[present], "avalista": i,
-        "acierta": acierta[present].to_numpy(), "ingreso": income[present].to_numpy(),
-        "cuota": VIEW.loc[present, "cuota_calculada"].to_numpy(),
-    }))
-avales = pd.concat(aval_frames, ignore_index=True)
-avales["capacidad_pago"] = avales["ingreso"].div(avales["cuota"].where(avales["cuota"] > 0))
-avales["cumple_acierta"] = avales["acierta"].ge(aval_cfg["acierta"]).fillna(False).astype(bool)
-avales["cumple_capacidad"] = avales["capacidad_pago"].ge(aval_cfg["capacidad_pago"]).fillna(False).astype(bool)
-avales["cumple"] = avales["cumple_acierta"] & avales["cumple_capacidad"]
-VIEW["tiene_avalista"] = VIEW.index.isin(avales["credito_idx"])
-VIEW["avalista_cumple"] = VIEW.index.isin(avales.loc[avales["cumple"], "credito_idx"])
+# ---------------- Ramas con "Condiciones" ----------------
+st.markdown('<div class="fa-section">Ramas del árbol con decisión "Condiciones"</div>', unsafe_allow_html=True)
+decisions = arbol_decisions()
+conditions = mitigante_conditions()
+# Decisión final de cada crédito con rama completa: la de su rama en Árbol; en las ramas con
+# "Condiciones", Aprobado si tiene los mitigantes exigidos y A estudio si no.
+BRANCHED = final_decisions(VIEW, decisions, conditions)
 
-with right:
-    m1, m2, m3, m4 = st.columns(4)
-    n_with = int(VIEW["tiene_avalista"].sum())
-    m1.metric("Créditos con avalista", format_n(n_with), format_pct(n_with, total), delta_color="off")
-    m2.metric("Avalistas que cumplen Acierta", format_n(avales["cumple_acierta"].sum()), format_pct(avales["cumple_acierta"].sum(), len(avales)), delta_color="off")
-    m3.metric("Avalistas que cumplen capacidad", format_n(avales["cumple_capacidad"].sum()), format_pct(avales["cumple_capacidad"].sum(), len(avales)), delta_color="off")
-    n_ok = int(VIEW["avalista_cumple"].sum())
-    m4.metric("Créditos con avalista que cumple", format_n(n_ok), format_pct(n_ok, n_with), delta_color="off")
-    st.caption(f"{format_n(len(avales))} avalistas registrados. Los porcentajes de avalistas son sobre ese total; "
-               "el de créditos que cumplen es sobre los créditos con avalista.")
-    g1, g2 = st.columns(2, gap="medium")
-    with g1:
-        st.markdown("**Acierta del avalista**")
-        threshold_histogram(avales["acierta"], "Acierta", aval_cfg["acierta"], "mit_hist_acierta")
-    with g2:
-        st.markdown("**Capacidad de pago (ingreso / cuota)**")
-        threshold_histogram(avales["capacidad_pago"], "Ingreso avalista / cuota", aval_cfg["capacidad_pago"], "mit_hist_capacidad", x_max=1)
+branches = [k.split(" | ") for k, v in decisions.items() if v == CONDICIONES]
+table = pd.DataFrame(branches, columns=TREE_LEVELS)
+if selected_segment != "Todos":
+    table = table[table["Segmento"].eq(selected_segment)]
+if table.empty:
+    st.info('No hay ramas con decisión "Condiciones" para este segmento. Asígnalas en la columna Decisión de la hoja Árbol.')
+else:
+    order = {level: {v: i for i, v in enumerate(values)} for level, values in
+             zip(TREE_LEVELS, [SEGMENT_ORDER, RIE_ORDER, LICENSE_ORDER, CONDITION_ORDER])}
+    table = table.sort_values(TREE_LEVELS, key=lambda s: s.map(order[s.name])).reset_index(drop=True)
+    keys = table.apply(branch_key, axis=1)
+    table["Avalista"] = [int(conditions.get(k, {}).get("avalista", 0)) for k in keys]
+    table["Garantía"] = [int(conditions.get(k, {}).get("garantia", 0)) for k in keys]
+    # Cumple: % de créditos de la rama con los mitigantes exigidos; las ramas 0/0 no se evalúan.
+    rate = BRANCHED.groupby("rama")["cumple"].agg(lambda c: c.astype(float).mean() * 100 if c.notna().any() else np.nan)
+    table[CUMPLE] = keys.map(rate).astype(float)
+    table[NO_CUMPLE] = 100 - table[CUMPLE]
 
-# ---------------- Garantías ----------------
-st.markdown('<div class="fa-section">Garantías</div>', unsafe_allow_html=True)
-left, right = st.columns([1, 2.4], gap="medium")
-with left:
-    with st.container(border=True):
-        st.markdown("**Criterio de la garantía**")
-        gar_cfg = config_editor("garantia", {
-            "valor": ("Valor mínimo (garantía / valor a financiar)", dict(min_value=0.0, max_value=100.0, step=0.05, format="%.2f")),
-        })
-        st.caption("Valor = suma de las garantías idóneas (RPV1–RPV3) / valor a financiar del crédito. "
-                   "El crédito queda mitigado si alcanza el mínimo.")
-        st.markdown("**Reglas fijas de idoneidad**")
-        st.caption(f"Prendado = NO y antigüedad de máximo {GARANTIA_MAX_ANTIGUEDAD} años ({CURRENT_YEAR} − año modelo). "
-                   "Si falta el estado de prenda o el año modelo, la garantía no es idónea.")
+    edited = st.data_editor(table, width="stretch", hide_index=True, num_rows="fixed",
+        height=min(38 + 35 * len(table), 720), key=f"mit_condiciones_editor_{selected_segment}",
+        disabled=TREE_LEVELS + [CUMPLE, NO_CUMPLE],
+        column_config={"Avalista": st.column_config.SelectboxColumn("Avalista", options=[1, 0], required=True),
+                       "Garantía": st.column_config.SelectboxColumn("Garantía", options=[1, 0], required=True),
+                       CUMPLE: st.column_config.NumberColumn(CUMPLE, format="%.1f%%"),
+                       NO_CUMPLE: st.column_config.NumberColumn(NO_CUMPLE, format="%.1f%%")})
+    changed = False
+    for key, aval, gar in zip(keys, edited["Avalista"], edited["Garantía"]):
+        new = {"avalista": int(aval), "garantia": int(gar)}
+        if conditions.get(key, {"avalista": 0, "garantia": 0}) != new:
+            conditions[key] = new
+            changed = True
+    # Al editar Avalista o Garantía se recalculan las columnas de cumplimiento y las tarjetas.
+    if changed:
+        st.rerun()
 
-registered = pd.Series(0.0, index=VIEW.index)
-eligible = pd.Series(0.0, index=VIEW.index)
-for i in GARANTIAS:
-    value = pd.to_numeric(VIEW[f"RPV{i}Valor"].astype("string"), errors="coerce").fillna(0)
-    model_year = pd.to_numeric(VIEW[f"RPV{i}Modelo"], errors="coerce")
-    # Un campo vacío no permite verificar la regla: la garantía no es idónea.
-    not_pledged = VIEW[f"RPV{i}Prendado"].astype("string").str.strip().str.upper().eq("NO").fillna(False)
-    recent = (CURRENT_YEAR - model_year).le(GARANTIA_MAX_ANTIGUEDAD).fillna(False)
-    registered += value
-    eligible += value.where(not_pledged & recent, 0)
-VIEW["tiene_garantia"] = registered.gt(0)
-VIEW["garantia_idonea"] = eligible.gt(0)
-VIEW["cobertura_garantia"] = eligible.where(VIEW["garantia_idonea"]).div(VIEW["valor_financiar"].where(VIEW["valor_financiar"] > 0))
-VIEW["garantia_cumple"] = VIEW["cobertura_garantia"].ge(gar_cfg["valor"]).fillna(False).astype(bool)
+    c_save, c_reset = st.columns(2)
+    with c_save:
+        if st.button("Guardar condiciones", type="primary", width="stretch", key="mit_guardar_condiciones"):
+            with open(CONDICIONES_PATH, "w", encoding="utf-8") as f:
+                json.dump(conditions, f, ensure_ascii=False, indent=2)
+            st.success("Condiciones guardadas.")
+    with c_reset:
+        if st.button("Descartar cambios sin guardar", width="stretch", key="mit_descartar_condiciones"):
+            st.session_state[CONDICIONES_STATE] = read_json(CONDICIONES_PATH)
+            for k in [k for k in st.session_state if str(k).startswith("mit_condiciones_editor_")]:
+                del st.session_state[k]
+            st.rerun()
+    st.caption("Avalista y Garantía (1/0) definen el mitigante exigido a cada rama: con un 1 se exige ese mitigante y con "
+               "ambos en 1 se exigen los dos. Decisión - Cumple es el % de créditos de la rama que tienen los mitigantes "
+               "exigidos y Decisión - No cumple el resto. Las ramas con ambos en 0 no se evalúan.")
 
-with right:
-    m1, m2, m3 = st.columns(3)
-    n_gar = int(VIEW["tiene_garantia"].sum())
-    m1.metric("Créditos con garantía", format_n(n_gar), format_pct(n_gar, total), delta_color="off")
-    n_gar_idonea = int(VIEW["garantia_idonea"].sum())
-    m2.metric("Créditos con garantía idónea", format_n(n_gar_idonea), format_pct(n_gar_idonea, n_gar), delta_color="off")
-    n_gar_ok = int(VIEW["garantia_cumple"].sum())
-    m3.metric("Créditos con garantía que cumple", format_n(n_gar_ok), format_pct(n_gar_ok, n_gar), delta_color="off")
-    st.caption("Los porcentajes de garantía idónea y que cumple son sobre los créditos con garantía registrada.")
-    st.markdown("**Valor de la garantía / valor a financiar**")
-    threshold_histogram(VIEW["cobertura_garantia"], "Garantía / valor a financiar", gar_cfg["valor"], "mit_hist_garantia", x_max=1)
-
-# ---------------- Resumen ----------------
-st.markdown('<div class="fa-section">Resumen de mitigantes</div>', unsafe_allow_html=True)
-aval_ok, gar_ok = VIEW["avalista_cumple"], VIEW["garantia_cumple"]
-VIEW["grupo_mitigante"] = np.select([aval_ok & gar_ok, aval_ok, gar_ok],
-    ["Avalista y garantía", "Solo avalista", "Solo garantía"], "Sin mitigante")
-mora = pd.to_numeric(VIEW["mora_max_15m"], errors="coerce")
-summary = (VIEW.assign(mora_60=mora.gt(60), mora_90=mora.gt(90))
-    .groupby("grupo_mitigante").agg(Créditos=("credito", "size"), mora_60=("mora_60", "mean"), mora_90=("mora_90", "mean"))
-    .reindex(GROUP_ORDER).fillna(0))
-summary["% créditos"] = summary["Créditos"] / total * 100 if total else 0.0
-summary[["mora_60", "mora_90"]] *= 100
-summary = summary.rename(columns={"mora_60": "% mora > 60 días", "mora_90": "% mora > 90 días"}).reset_index(names="Mitigante")
-st.dataframe(summary[["Mitigante", "Créditos", "% créditos", "% mora > 60 días", "% mora > 90 días"]],
-    width="stretch", hide_index=True, column_config={
-        "Créditos": st.column_config.NumberColumn(format="%d"),
-        "% créditos": st.column_config.NumberColumn(format="%.2f%%"),
-        "% mora > 60 días": st.column_config.NumberColumn(format="%.2f%%"),
-        "% mora > 90 días": st.column_config.NumberColumn(format="%.2f%%"),
-    })
-st.caption("Solo cuentan los mitigantes que cumplen los criterios. La mora corresponde a la mora máxima en los "
-           "primeros 15 meses (o hasta el corte), para todos los créditos del perfil seleccionado.")
+# ---------------- Decisión final ----------------
+st.markdown('<div class="fa-section">Decisión final</div>', unsafe_allow_html=True)
+final = {label: BRANCHED["decision_final"].eq(label) for label in [APROBADO, A_ESTUDIO]}
+total_branched = len(BRANCHED)
+for col, (label, mask) in zip(st.columns(2, gap="medium"), final.items()):
+    n = int(mask.sum())
+    col.metric(label, format_n(n), format_pct(n, total_branched), delta_color="off", border=True)
+n_rest = total_branched - int(final["Aprobado"].sum() + final["A estudio"].sum())
+st.caption(f"Porcentajes sobre {format_n(total_branched)} créditos del segmento con rama completa en el árbol (RIE calculable). "
+           "Aprobado: ramas con decisión Aprobado en Árbol más los créditos de ramas con Condiciones que cumplen los "
+           "mitigantes exigidos. A estudio: ramas con decisión A estudio más los que no cumplen."
+           + (f" {format_n(n_rest)} créditos quedan fuera: ramas sin decisión o con Condiciones en 0/0." if n_rest else ""))

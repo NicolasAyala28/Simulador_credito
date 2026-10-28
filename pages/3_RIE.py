@@ -5,6 +5,7 @@ import streamlit as st
 
 from src.common import financed_amount, monthly_payment
 from src.data_loader import load_data, prepare_data
+from src.rie import rie_scores
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="RIE · Componentes y reglas", page_icon="◈", layout="wide")
@@ -269,95 +270,10 @@ with st.container(border=True):
 st.markdown("---")
 banner("Resultados del RIE", "Puntaje combinado mediante la normalización 3/7, con distribución por licencia.", "▦")
 
-# Construcción del puntaje RIE siguiendo las ponderaciones de Motor_decision.pptx:
-# Respaldo: LTV 100% (0-3); Ingresos: PTI/DTI/EI 33,3% cada uno (0-3);
-# Experiencia: 100% (0 o 1). Total máximo = 7.
+# Puntaje RIE (Motor_decision.pptx), calculado en src/rie.py para compartirlo con la hoja Árbol.
 all_licenses = DATA["licencia_vehiculo"].astype("string").str.upper()
-vehicle_all = field("ValorVh")
-financing_all = principal
-ltv_all = financing_all.div(vehicle_all.where(vehicle_all > 0))  # ratio 0-1, no porcentaje
-
-# LTV según tabla de página 10 de la presentación.
-ltv_score_all = pd.Series(np.nan, index=DATA.index, dtype=float)
-for code, bounds in [("PAR", [(0.0, .70, 3), (.70, .75, 2), (.75, .85, 1), (.85, 1.0, 0)]),
-                     ("PUB", [(0.0, .75, 3), (.75, .80, 2), (.80, .90, 1), (.90, 1.0, 0)])]:
-    lic_mask = all_licenses.eq(code)
-    for lo, hi, score_l in bounds:
-        # Los intervalos comparten extremos; se conserva el puntaje del intervalo superior.
-        mask = lic_mask & ltv_all.ge(lo) & ltv_all.le(hi)
-        ltv_score_all.loc[mask] = score_l
-
-# PTI y DTI: umbrales por licencia y estado civil, páginas 11-12.
-# Los ratios se calculan en escala 0-1 (porcentaje / 100).
-marital = DATA.get("estado_civil", pd.Series("", index=DATA.index)).astype("string").str.upper().fillna("")
-married = marital.str.contains("CASAD|UNION|UNIÓN|LIBRE", regex=True)
-particular = all_licenses.eq("PAR")
-public = all_licenses.eq("PUB")
-
-# Calificación 0 = tramo de mayor ratio; 1 = intermedio; 2 = menor ratio.
-def income_score_by_threshold(values, thresholds):
-    out = pd.Series(np.nan, index=DATA.index, dtype=float)
-    for mask, (high, mid) in thresholds:
-        vals = values.loc[mask]
-        out.loc[mask & values.gt(high)] = 0
-        out.loc[mask & values.le(high) & values.gt(mid)] = 1
-        out.loc[mask & values.le(mid)] = 2
-    return out
-
-pti_ratio = pti / 100.0
-dti_ratio = dti / 100.0
-pti_thresholds = [
-    (particular & married, (.50, .25)),
-    (particular & ~married, (.45, .20)),
-    (public & married, (.55, .35)),
-    (public & ~married, (.50, .30)),
-]
-dti_thresholds = [
-    (particular & married, (.55, .40)),
-    (particular & ~married, (.50, .35)),
-    (public & married, (.70, .50)),
-    (public & ~married, (.65, .45)),
-]
-pti_score = income_score_by_threshold(pti_ratio, pti_thresholds)
-dti_score = income_score_by_threshold(dti_ratio, dti_thresholds)
-# EI tabla página 12: >18 => 0; 12 < EI <=18 => 1; <=12 => 2.
-ei_score = pd.Series(np.nan, index=DATA.index, dtype=float)
-ei_score.loc[ei.gt(18)] = 0
-ei_score.loc[ei.le(18) & ei.gt(12)] = 1
-ei_score.loc[ei.le(12) & ei.ge(0)] = 2
-
-# Ponderación explícita de 33,3% por subítem y reescalado del promedio 0-2 al
-# componente Ingresos 0-3, como define la tabla general RIE (página 9).
-income_scores = pd.concat([pti_score, dti_score, ei_score], axis=1)
-income_component = (income_scores.mean(axis=1, skipna=False) * 1.5)
-
-# Experiencia: según página 13, deben cumplirse los criterios de monto >30% del
-# valor a financiar, antigüedad >=1 año y calificación <4. Por instrucción del usuario,
-# se asume provisionalmente que la garantía 1 tiene licencia Pública; por tanto, el
-# requisito adicional de garantía pública se considera cumplido para el segmento Público.
-max_amount_all = field("MontoMaxSolicGeneral")
-exp_ratio_all = max_amount_all.div(principal.where(principal > 0)).mul(100)
-date_request_all = pd.to_datetime(DATA.get("FechaProceso", pd.Series(pd.NaT,index=DATA.index)), format="mixed", errors="coerce")
-date_open_all = pd.to_datetime(DATA.get("FechaAperturaMontoMax", pd.Series(pd.NaT,index=DATA.index)), format="mixed", errors="coerce")
-# Supuesto temporal solicitado: imputar la fecha de hoy cuando la fecha de apertura falta o no es válida.
-today = pd.Timestamp.today().normalize()
-date_open_all = date_open_all.mask(date_open_all.isna() | (date_open_all.dt.year <= 1901), today)
-rating_all = field("CalificacionMontoMax")
-exp_amount_ok = exp_ratio_all.gt(float(st.session_state.get("rie_experience_pct", 30.0)))
-exp_age_ok = date_request_all.notna() & date_open_all.notna() & date_open_all.dt.year.gt(1901) & ((date_request_all - date_open_all).dt.days >= 365)
-exp_rating_ok = rating_all.lt(4)
-exp_eval = exp_ratio_all.notna() & date_request_all.notna() & date_open_all.notna() & date_open_all.dt.year.gt(1901) & rating_all.notna() & principal.gt(0)
-exp_pass = exp_amount_ok & exp_age_ok & exp_rating_ok
-experience_component = pd.Series(np.where(exp_eval, exp_pass.astype(float), np.nan), index=DATA.index, dtype=float)
-
-score_total = ltv_score_all + income_component + experience_component
-score_total = score_total.where(score_total.between(0, 7) & score_total.notna()).round()
-score_total = score_total.astype("Int64")
-# Tabla de normalización literal de página 9: 0-1=>0, 2-3=>1, 4-5=>2, 6-7=>3.
-normalization_map = {0: 0, 1: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 3}
-normalized = score_total.map(normalization_map).astype("Int64")
-category = normalized.map({0: "AE", 1: "A", 2: "AA", 3: "AA"})
-results = pd.DataFrame({"Puntaje": score_total, "Normalización": normalized, "Categoría": category, "Licencia": all_licenses})
+results = rie_scores(DATA, term_months=term_months, experience_pct=pct_max)
+results["Licencia"] = all_licenses
 results = results.loc[VIEW.index]
 
 result_rows = []

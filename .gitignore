@@ -4,3 +4,7 @@ __pycache__/
 config/matrices/*.json
 data/*
 .python-version
+
+
+.agent-logs
+.claude

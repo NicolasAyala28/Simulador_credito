@@ -13,12 +13,10 @@ streamlit run app.py
 
 La identidad visual está centralizada en `src/theme.py` y `.streamlit/config.toml`. La aplicación usa una cabecera verde corporativa, barra lateral de marca, paneles claros y categorías AA (verde), A (amarillo) y AE (rojo).
 
-## Matrices
+## Árbol (antes Matrices)
 
-- **Score:** Acierta vs. Frank, con deciles 0–1000, matriz principal editable, restablecimiento y guardado local.
-- **Exposición:** cuota inicial vs. valor del vehículo, con matriz editable por deciles de la población.
-- **Riesgo:** estructura editable de categorización 1–7.
-- Las matrices de concentración muestran la proporción de registros por combinación de deciles. La matriz condicionada queda preparada visualmente, sin aplicar filtros ni inventar una regla de negocio mientras esta no se defina.
+- **Árbol:** Segmento → RIE (normalización agrupada en 0-1, 2 y 3) → Licencia → Condición, con diagrama y tabla de concentración de `mora_max_15m` en rangos de 30 días (columna Mora > 30 = % de créditos de la rama con mora mayor a 30 días; los rangos 31–60 a 150+ reparten esa mora y suman 100%). La tabla tiene filtros por Segmento, RIE, Licencia y Condición, y una columna Decisión editable (Aprobado, Condiciones, A estudio) que se guarda por rama en `config/arbol_decision.json`. Al final, tarjetas con los créditos Aprobados, en Condiciones y A estudio (cantidad y % sobre el total de la tabla). Replica la hoja 1 de `arbol.xlsx`. Los créditos sin RIE calculable se excluyen y se informa su cantidad.
+- El puntaje RIE se calcula en `src/rie.py`, compartido con la página RIE.
 
 
 ## Página RIE (versión 2)
@@ -28,14 +26,14 @@ Se agregó `pages/3_RIE.py` antes de Matrices. Incluye Respaldo (LTV), Ingresos 
 
 ## Página Mitigantes
 
-`pages/5_Mitigantes.py` evalúa avalistas y garantías con los criterios de `config/avalista.json` y `config/garantia.json`, que se pueden editar y guardar desde la página.
+`pages/5_Mitigantes.py` muestra, para el segmento seleccionado:
 
-- **Avalista:** cumple si su Acierta es mayor o igual a `acierta` y su capacidad de pago (`ingreso del avalista / cuota calculada`) es mayor o igual a `capacidad_pago`. El crédito queda mitigado si al menos uno de sus avalistas (hasta 3) cumple.
-- **Garantía:** el valor es `suma de las garantías idóneas (RPV1Valor–RPV3Valor) / valor a financiar`. El crédito queda mitigado si es mayor o igual a `valor`.
-- **Reglas fijas de la garantía (no editables):** es idónea solo si `RPVxPrendado = NO` y tiene máximo 10 años (año actual − `RPVxModelo`). Si falta el estado de prenda o el año modelo, no es idónea.
-- **Reglas fijas del avalista omitidas por ahora:** tipo de identificación igual a 1 (`AvalistaxAVId` coincide con la posición del avalista, no con el tipo de documento) y no residir en departamentos de exclusión (la base no trae la ubicación del avalista).
-- La cuota calculada es la misma de RIE (sistema francés, `tasa_nominal` mensual y plazo editable, 60 meses por defecto); la fórmula está en `src/common.py`.
-- El resumen muestra la mora máxima en 15 meses (> 60 y > 90 días) según el mitigante que cumple el crédito.
+- **Tarjetas:** créditos con avalista(s) idóneo(s), con garantía(s) idónea(s) y con ambos (cantidad y % sobre los créditos del segmento).
+- **Avalista idóneo:** Acierta ≥ `acierta` y capacidad de pago (`ingreso del avalista / cuota calculada`) ≥ `capacidad_pago` de `config/avalista.json`; basta con uno de sus avalistas (hasta 3).
+- **Garantía idónea:** cada garantía (RPV1–RPV3) debe estar no prendada (`RPVxPrendado = NO`), tener máximo 10 años y un valor superior al `valor` de `config/garantia.json` (20 %) del valor del vehículo. El crédito tiene garantía idónea si sus garantías idóneas suman más del 50 % del valor a financiar (`ValorVh − MontoCtaInicial`).
+- **Tabla:** las ramas (Segmento, RIE, Licencia, Condición) con decisión "Condiciones" en la hoja Árbol. Las columnas editables Avalista y Garantía (1/0) definen el mitigante exigido; Decisión - Cumple / No cumple es el % de créditos de la rama que tienen o no los mitigantes exigidos. Las ramas con 0/0 no se evalúan. Las condiciones se guardan en `config/mitigantes_condiciones.json`.
+- **Decisión final (tarjetas al final):** Aprobado = ramas con decisión Aprobado más los créditos de ramas con Condiciones que cumplen los mitigantes exigidos; A estudio = ramas con decisión A estudio más los que no cumplen. % sobre los créditos del segmento con RIE calculable.
+- La cuota calculada usa el plazo de la hoja RIE (60 meses por defecto); la fórmula está en `src/common.py`.
 
 ## Calidad de datos
 
@@ -47,7 +45,7 @@ Las reglas acordadas en la auditoría se aplican en `clean_data` (`src/data_load
 - **Cuota sector telcos:** se usa `ValorCuotaSectorTelcos` (numérico, sin separadores).
 - **Columnas eliminadas:** `traslado` (constante), `IngresoTotalMensual` y `ValorCuotaCST` (reemplazadas por las anteriores).
 - **Mora:** se usa `mora_max_15m`, la mora máxima en los primeros 15 meses desde el desembolso (o hasta el corte si el crédito aún no los cumple), con `meses_observados` como meses efectivamente observados.
-- **Meses de vida:** `meses_vida` = meses entre el desembolso y la fecha de corte, que se infiere de la base (último mes observado). Es la base del filtro de antigüedad mínima en Matrices; no usa `meses_observados` porque este se reduce cuando el crédito se cancela antes de los 15 meses.
+- **Meses de vida:** `meses_vida` = meses entre el desembolso y la fecha de corte, que se infiere de la base (último mes observado). Es la base del filtro de antigüedad mínima en Árbol; no usa `meses_observados` porque este se reduce cuando el crédito se cancela antes de los 15 meses.
 - **Nombres de columnas:** `Frank`, `FGA`, `FrankDecision` y `PlanFinanciacion` se normalizan a esos nombres sin importar las mayúsculas con que lleguen.
 - El resto de valores (`acierta = 0`, `FechaAperturaMontoMax = 0001-01-01`, variables de buró) se toman tal como vienen en la base.
 
@@ -55,3 +53,12 @@ Pendientes anotados:
 
 - 6 créditos no cruzan con la solicitud (`NumeroSolicitud` nulo), por lo que no tienen variables del motor.
 - `MontoMaxSolicGeneral` tiene 22 valores por encima de 1.000 millones (máximo 16.880 millones).
+
+## Página Decisión
+
+`pages/7_Decision.py` muestra la decisión final de cada crédito luego de mitigantes, con una torta (total) y barras apiladas por segmento, más una tabla con cantidades y %:
+
+- Ramas con decisión Aprobado o A estudio en la hoja Árbol conservan esa decisión.
+- En las ramas con Condiciones, el crédito pasa a Aprobado si cumple los mitigantes exigidos en la hoja Mitigantes y a A estudio si no.
+- Sin decisión: créditos de ramas sin decisión en Árbol o con Condiciones en 0/0.
+- La lógica es compartida con Mitigantes en `src/decision.py`. La base son los créditos con RIE calculable.
