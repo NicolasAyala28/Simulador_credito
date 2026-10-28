@@ -1,134 +1,92 @@
-from pathlib import Path
-
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
-from src.data_loader import load_data, prepare_data, ROOT
-from src.common import quantile_categories
+from src.common import load_config
+from src.data_loader import load_data, prepare_data
+from src.decision import (A_ESTUDIO, APROBADO, FINAL_ORDER, SEGMENT_ORDER, SIN_DECISION, arbol_decisions,
+    credit_mitigants, final_decisions, mitigante_conditions)
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Decisión", page_icon="▦", layout="wide")
 apply_finanzauto_theme()
 
-st.title("7. Decisión")
-st.caption(
-    "Consulta las combinaciones de Score, Exposición y Riesgo y edita su decisión. "
-    "Los indicadores resumen los registros del perfil seleccionado."
-)
+TEXT = "#0A2F4A"
+# Verde corporativo para Aprobado, ámbar para A estudio y gris neutro para los créditos sin decisión.
+DECISION_COLORS = {APROBADO: "#087A55", A_ESTUDIO: "#E0A030", SIN_DECISION: "#9AA9B5"}
 
-# Filtro de perfil: los conteos y porcentajes se calculan dentro de la población elegida.
-df = prepare_data(load_data())
-profiles = sorted(df["perfil_label"].dropna().astype(str).unique().tolist()) if "perfil_label" in df else []
-selected_profile = st.selectbox("Perfil", ["Todos"] + profiles, key="decision_profile")
-data = df.copy()
-if selected_profile != "Todos":
-    data = data[data["perfil_label"].astype(str) == selected_profile]
+def format_n(n):
+    return f"{int(n):,}".replace(",", ".")
 
-population = len(data)
-st.caption(f"Población del perfil seleccionado: {population:,} registros".replace(",", "."))
-if data.empty:
-    st.warning("No hay registros para el perfil seleccionado.")
+st.markdown("""
+<div class="fa-hero" style="padding:17px 24px;min-height:0;margin-bottom:12px">
+  <div class="eyebrow">Finanzauto · Motor de decisión</div>
+  <h1 style="font-size:27px">Decisión final</h1>
+  <p>Decisión de cada crédito luego de mitigantes: la de su rama en el árbol y, en las ramas con "Condiciones",
+  Aprobado si cumple los mitigantes exigidos y A estudio si no.</p>
+</div>
+""", unsafe_allow_html=True)
+
+DATA = credit_mitigants(prepare_data(load_data()).reset_index(drop=True),
+                        load_config("avalista"), load_config("garantia"))
+FINAL = final_decisions(DATA, arbol_decisions(), mitigante_conditions())
+total = len(FINAL)
+if not total:
+    st.warning("No hay créditos con RIE calculable para asignar una decisión.")
     st.stop()
+counts = FINAL["decision_final"].value_counts().reindex(FINAL_ORDER, fill_value=0)
+# "Sin decisión" solo se muestra si hay créditos en esa situación.
+labels = [l for l in FINAL_ORDER if l != SIN_DECISION or counts[l]]
 
-# Lee la metodología inicial de Excel hasta la columna Decisión.
-workbook = ROOT / "data" / "asignacion_decision.xlsx"
-try:
-    methodology = pd.read_excel(workbook, sheet_name="Metodologia", usecols="A:D")
-    methodology.columns = ["Scores", "Exposición", "Riesgo", "Decisión"]
-    methodology = methodology.ffill()
-    methodology = methodology.dropna(subset=["Scores", "Exposición", "Riesgo"])
-    for col in ["Scores", "Exposición", "Riesgo", "Decisión"]:
-        methodology[col] = methodology[col].astype("string").str.strip()
-    methodology = methodology.drop_duplicates(subset=["Scores", "Exposición", "Riesgo"], keep="first")
-except Exception as exc:
-    st.error(f"No fue posible leer la hoja Metodologia: {exc}")
-    st.stop()
-
-# Clasificación de registros vigente en esta versión (provisional).
-for source, target in [("acierta", "cat_Scores"), ("cuota_inicial", "cat_Exposición")]:
-    data[target] = quantile_categories(data[source]) if source in data.columns else pd.NA
-if "EndeudamientoSaldoSin" in data.columns:
-    values = pd.to_numeric(data["EndeudamientoSaldoSin"], errors="coerce")
-    valid_risk = values.notna()
-    data["cat_Riesgo"] = pd.NA
-    try:
-        if valid_risk.sum() >= 3:
-            data.loc[valid_risk, "cat_Riesgo"] = pd.qcut(
-                values[valid_risk].rank(method="first"), q=3, labels=["AA", "A", "AE"]
-            ).astype(str)
-    except (ValueError, TypeError):
-        pass
-else:
-    data["cat_Riesgo"] = pd.NA
-
-st.warning(
-    "La clasificación de Score y Exposición se calcula provisionalmente por cuantiles. "
-    "Riesgo utiliza EndeudamientoSaldoSin como aproximación porque la base no contiene una variable RIE explícita. "
-    "Valida estas reglas antes de usar los resultados para decisiones crediticias reales."
-)
-
-# Decisiones temporales: no se implementa persistencia en esta etapa.
-key_cols = ["Scores", "Exposición", "Riesgo"]
-valid_decisions = ["AA", "A", "AE"]
-
-# Cuenta registros por combinación antes de mostrar la única tabla editable.
-valid = data.dropna(subset=["cat_Scores", "cat_Exposición", "cat_Riesgo"]).copy()
-valid = valid.rename(columns={
-    "cat_Scores": "Scores",
-    "cat_Exposición": "Exposición",
-    "cat_Riesgo": "Riesgo",
-})
-counts = valid.groupby(key_cols, observed=False).size().rename("Cantidad (#)").reset_index()
-result = methodology.merge(counts, on=key_cols, how="left")
-result["Cantidad (#)"] = result["Cantidad (#)"].fillna(0).astype(int)
-result["Porcentaje (%)"] = (result["Cantidad (#)"] / population * 100).round(2)
-result = result[key_cols + ["Decisión", "Cantidad (#)", "Porcentaje (%)"]]
-
-st.subheader("Matriz de decisión")
-st.caption("Edita la columna Decisión. Cantidad y porcentaje se calculan automáticamente para cada combinación; el porcentaje usa como denominador la población del perfil seleccionado.")
-edited = st.data_editor(
-    result,
-    key="decision_matrix_editor",
-    width="stretch",
-    hide_index=True,
-    num_rows="fixed",
-    disabled=key_cols + ["Cantidad (#)", "Porcentaje (%)"],
-    column_config={
-        "Decisión": st.column_config.SelectboxColumn(
-            "Decisión (editable)", options=valid_decisions, required=True
-        ),
-        "Cantidad (#)": st.column_config.NumberColumn(format="%d"),
-        "Porcentaje (%)": st.column_config.NumberColumn(format="%.2f%%"),
-    },
-)
-
-# Tarjetas resumen: los valores se calculan en tiempo real a partir de la tabla editable.
-chart_data = edited.copy()
-chart_data["Decisión"] = chart_data["Decisión"].astype("string").str.strip()
-chart_data = chart_data[chart_data["Decisión"].isin(valid_decisions)]
-summary = chart_data.groupby("Decisión", as_index=False).agg(Registros=("Cantidad (#)", "sum"))
-summary_map = summary.set_index("Decisión")["Registros"].to_dict() if not summary.empty else {}
-
-approved_count = int(summary_map.get("A", 0))
-study_count = int(summary_map.get("AE", 0))
-approved_pct = (approved_count / population * 100) if population else 0
-study_pct = (study_count / population * 100) if population else 0
-
-st.subheader("Resumen de decisiones")
-card_a, card_ae = st.columns(2, gap="medium")
-with card_a:
+left, right = st.columns([1, 1.4], gap="medium")
+with left:
     with st.container(border=True):
-        st.markdown("<div style='color:#064B39;font-weight:650;font-size:1rem'>Aprobados (A)</div>", unsafe_allow_html=True)
-        metric_count, metric_pct = st.columns(2)
-        with metric_count:
-            st.metric("Cantidad (#)", f"{approved_count:,}".replace(",", "."))
-        with metric_pct:
-            st.metric("Porcentaje (%)", f"{approved_pct:.2f}%")
-with card_ae:
+        st.markdown('<div class="fa-section">Decisión final</div>', unsafe_allow_html=True)
+        fig = go.Figure(go.Pie(
+            labels=labels, values=[int(counts[l]) for l in labels], hole=.55, sort=False, direction="clockwise",
+            marker=dict(colors=[DECISION_COLORS[l] for l in labels], line=dict(color="white", width=2)),
+            texttemplate="%{label}<br>%{percent:.1%}", textposition="outside", textfont=dict(color=TEXT, size=12),
+            hovertemplate="%{label}: %{value:,} créditos (%{percent:.1%})<extra></extra>"))
+        fig.update_layout(height=380, margin=dict(l=20, r=20, t=30, b=20), showlegend=True,
+            legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"),
+            annotations=[dict(text=f"<b>{format_n(total)}</b><br>créditos", showarrow=False,
+                              font=dict(color=TEXT, size=14))],
+            paper_bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT), separators=",.")
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="decision_torta")
+
+with right:
     with st.container(border=True):
-        st.markdown("<div style='color:#15966A;font-weight:650;font-size:1rem'>A Estudio (AE)</div>", unsafe_allow_html=True)
-        metric_count, metric_pct = st.columns(2)
-        with metric_count:
-            st.metric("Cantidad (#)", f"{study_count:,}".replace(",", "."))
-        with metric_pct:
-            st.metric("Porcentaje (%)", f"{study_pct:.2f}%")
+        st.markdown('<div class="fa-section">Decisión final por segmento</div>', unsafe_allow_html=True)
+        by_segment = (pd.crosstab(FINAL["Segmento"], FINAL["decision_final"])
+                      .reindex(index=[s for s in SEGMENT_ORDER if FINAL["Segmento"].eq(s).any()], columns=labels, fill_value=0))
+        shares = by_segment.div(by_segment.sum(axis=1), axis=0).mul(100)
+        fig = go.Figure()
+        for label in labels:
+            fig.add_bar(y=by_segment.index, x=shares[label], name=label, orientation="h",
+                marker=dict(color=DECISION_COLORS[label], line=dict(color="white", width=2)),
+                customdata=by_segment[label], text=shares[label].map(lambda v: f"{v:.0f}%" if v >= 5 else ""),
+                textposition="inside", insidetextanchor="middle", textfont=dict(color="white", size=11),
+                hovertemplate="%{y} · " + label + ": %{customdata:,} créditos (%{x:.1f}%)<extra></extra>")
+        fig.update_layout(barmode="stack", height=380, margin=dict(l=8, r=8, t=30, b=20),
+            legend=dict(orientation="h", y=-0.12, x=0.5, xanchor="center", traceorder="normal"),
+            xaxis=dict(range=[0, 100], ticksuffix="%", gridcolor="#E5EFEA", title=None),
+            yaxis=dict(autorange="reversed", title=None),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT), separators=",.")
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="decision_segmento")
+
+# Vista en tabla de los dos gráficos: cantidad y % por segmento.
+table = by_segment.copy()
+table.loc["Total"] = counts[labels]
+table.insert(0, "Créditos", table.sum(axis=1))
+for label in labels:
+    table[f"% {label}"] = table[label] / table["Créditos"] * 100
+st.dataframe(table.reset_index(names="Segmento"), width="stretch", hide_index=True,
+    column_config={**{c: st.column_config.NumberColumn(c, format="localized") for c in ["Créditos"] + labels},
+                   **{f"% {l}": st.column_config.NumberColumn(f"% {l}", format="%.1f%%") for l in labels}})
+note = (f"Base: {format_n(total)} créditos con RIE calculable y rama completa en el árbol. Las decisiones se toman de la "
+        "columna Decisión de la hoja Árbol y de las condiciones (Avalista / Garantía) de la hoja Mitigantes: las de la "
+        "sesión si se editaron, o si no las guardadas.")
+if counts[SIN_DECISION]:
+    note += (f" {format_n(counts[SIN_DECISION])} créditos quedan Sin decisión: su rama no tiene decisión en Árbol "
+             "o tiene Condiciones sin mitigante exigido (0/0).")
+st.caption(note)
