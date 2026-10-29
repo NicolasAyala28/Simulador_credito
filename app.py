@@ -50,6 +50,6 @@ for i, (num, title, desc) in enumerate(cards):
             elif title == "Mitigantes":
                 st.page_link("pages/5_Mitigantes.py", label="Abrir módulo →")
             else:
-                st.page_link("pages/7_Decision.py", label="Abrir módulo →")
+                st.page_link("pages/6_Decision.py", label="Abrir módulo →")
 
 st.info("Las reglas de clasificación y la condición de negocio están pendientes de validación. Los resultados de concentración son exploratorios hasta incorporar los criterios oficiales.")

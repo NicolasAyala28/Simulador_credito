@@ -56,7 +56,7 @@ Pendientes anotados:
 
 ## Página Decisión
 
-`pages/7_Decision.py` muestra la decisión final de cada crédito luego de mitigantes, con una torta (total) y barras apiladas por segmento, más una tabla con cantidades y %:
+`pages/6_Decision.py` muestra la decisión final de cada crédito luego de mitigantes, con una torta (total) y barras apiladas por segmento, más una tabla con cantidades y %:
 
 - Ramas con decisión Aprobado o A estudio en la hoja Árbol conservan esa decisión.
 - En las ramas con Condiciones, el crédito pasa a Aprobado si cumple los mitigantes exigidos en la hoja Mitigantes y a A estudio si no.
