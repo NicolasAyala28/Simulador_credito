@@ -1,0 +1,100 @@
+{
+  "meta": {
+    "usuario": "base",
+    "fecha": "2026-10-29T00:00:00",
+    "nota": "Versión 1: parámetros RIE de Motor_decision.pptx, sin decisiones ni mitigantes asignados.",
+    "basada_en": ""
+  },
+  "rie": {
+    "plazo_meses": 60,
+    "experiencia_pct": 30.0,
+    "ltv": {
+      "Particular": [
+        [
+          0.0,
+          70.0
+        ],
+        [
+          70.0,
+          75.0
+        ],
+        [
+          75.0,
+          85.0
+        ],
+        [
+          85.0,
+          100.0
+        ]
+      ],
+      "Público": [
+        [
+          0.0,
+          75.0
+        ],
+        [
+          75.0,
+          80.0
+        ],
+        [
+          80.0,
+          90.0
+        ],
+        [
+          90.0,
+          100.0
+        ]
+      ]
+    },
+    "pti": {
+      "Particular": {
+        "Casado / unión libre": {
+          "medio": 25.0,
+          "alto": 50.0
+        },
+        "Otro": {
+          "medio": 20.0,
+          "alto": 45.0
+        }
+      },
+      "Público": {
+        "Casado / unión libre": {
+          "medio": 35.0,
+          "alto": 55.0
+        },
+        "Otro": {
+          "medio": 30.0,
+          "alto": 50.0
+        }
+      }
+    },
+    "dti": {
+      "Particular": {
+        "Casado / unión libre": {
+          "medio": 40.0,
+          "alto": 55.0
+        },
+        "Otro": {
+          "medio": 35.0,
+          "alto": 50.0
+        }
+      },
+      "Público": {
+        "Casado / unión libre": {
+          "medio": 50.0,
+          "alto": 70.0
+        },
+        "Otro": {
+          "medio": 45.0,
+          "alto": 65.0
+        }
+      }
+    },
+    "ei": {
+      "medio": 12.0,
+      "alto": 18.0
+    }
+  },
+  "arbol": {},
+  "mitigantes": {}
+}

@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -5,13 +7,16 @@ import streamlit as st
 
 from src.common import financed_amount, monthly_payment
 from src.data_loader import load_data, prepare_data
-from src.rie import rie_scores
+from src.parametros import bind, rie_params, version_sidebar
+from src.rie import DEFAULT_PARAMS, LICENSES, LTV_SCORES, rie_scores
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="RIE · Componentes y reglas", page_icon="◈", layout="wide")
 apply_finanzauto_theme()
 
 DATA = prepare_data(load_data()).copy()
+# Parámetros compartidos con Árbol, Mitigantes y Decisión: los editores de esta hoja los modifican en sitio.
+PARAMS = rie_params()
 GREEN = "#087A55"
 DARK = "#064B39"
 MID = "#43BD83"
@@ -32,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("RIE – Componentes y reglas")
-st.caption("Evalúa Respaldo, Ingresos y Experiencia. La puntuación de resultados aplica las ponderaciones y tablas de Motor_decision.pptx. Los editores de rangos son herramientas exploratorias.")
+st.caption("Evalúa Respaldo, Ingresos y Experiencia. La puntuación de resultados aplica las ponderaciones y tablas de Motor_decision.pptx. Los rangos y parámetros editados aquí se aplican en Árbol, Mitigantes y Decisión, y se guardan con «Guardar como nueva versión» en la barra lateral.")
 
 # Utilidades de normalización para columnas que llegan como texto o con separadores.
 def num(series):
@@ -100,29 +105,69 @@ def density_chart(series, title, xlabel, thresholds, key, license_label=None):
     st.plotly_chart(fig, width="stretch", config={"displayModeBar":False}, key=key)
     st.caption(f"{format_n(len(values))} registros con valor calculable" + (f" · {license_label}" if license_label else ""))
 
-def editable_ranges(key, rows, min_vals, max_vals, labels, help_text="Edita los límites; las calificaciones son fijas."):
-    # Cada tabla de rangos tiene su propio botón de restablecimiento.
+def reset_button(key, reset):
+    if st.button("↺ Restablecer", key=f"rie_reset_{key}", width="stretch", help="Vuelve a los valores por defecto (sin guardar)."):
+        reset()
+        st.session_state.pop(f"rie_editor_{key}", None)
+        st.rerun()
+
+def ranges_editor(key, pairs, default_pairs, scores, unit):
+    """Rangos [mínimo, máximo] por calificación; actualiza en sitio la lista `pairs` de los parámetros."""
     c1, c2 = st.columns([3, 1])
     with c1:
-        st.caption(help_text)
+        st.caption("Edita los límites; las calificaciones son fijas.")
     with c2:
-        if st.button("↺ Restablecer", key=f"{key}_reset", width="stretch"):
-            st.session_state.pop(key, None)
-            st.rerun()
-    frame = pd.DataFrame({"Rango mínimo": min_vals, "Rango máximo": max_vals,
-                          "Calificación RIE": labels})
-    edited = st.data_editor(frame, key=key, width="stretch", hide_index=True,
+        reset_button(key, lambda: pairs.__setitem__(slice(None), copy.deepcopy(default_pairs)))
+    frame = pd.DataFrame({f"Rango mínimo ({unit})": [p[0] for p in pairs], f"Rango máximo ({unit})": [p[1] for p in pairs],
+                          "Calificación RIE": scores})
+    edited = st.data_editor(frame, key=f"rie_editor_{key}", width="stretch", hide_index=True,
         num_rows="fixed", column_config={
-            "Rango mínimo": st.column_config.NumberColumn("Rango mínimo", min_value=0.0, max_value=1000000000.0, step=0.1, format="%.2f", required=True),
-            "Rango máximo": st.column_config.NumberColumn("Rango máximo", min_value=0.0, max_value=1000000000.0, step=0.1, format="%.2f", required=True),
+            **{c: st.column_config.NumberColumn(c, min_value=0.0, max_value=1000000000.0, step=0.1, format="%.2f", required=True)
+               for c in frame.columns[:2]},
             "Calificación RIE": st.column_config.NumberColumn("Calificación RIE", disabled=True),
         })
-    mins = pd.to_numeric(edited["Rango mínimo"], errors="coerce").to_numpy(dtype=float)
-    maxs = pd.to_numeric(edited["Rango máximo"], errors="coerce").to_numpy(dtype=float)
+    mins = pd.to_numeric(edited.iloc[:, 0], errors="coerce").to_numpy(dtype=float)
+    maxs = pd.to_numeric(edited.iloc[:, 1], errors="coerce").to_numpy(dtype=float)
     valid = np.all(np.isfinite(mins)) and np.all(np.isfinite(maxs)) and np.all(mins < maxs) and np.all(mins[1:] >= maxs[:-1])
-    if not valid:
-        st.warning("Revisa los límites: cada mínimo debe ser menor que su máximo y los rangos no deben superponerse.")
+    if valid:
+        pairs[:] = [[float(lo), float(hi)] for lo, hi in zip(mins, maxs)]
+    else:
+        st.warning("Revisa los límites: cada mínimo debe ser menor que su máximo y los rangos no deben superponerse. "
+                   "Mientras tanto se aplican los últimos valores válidos.")
     return mins, maxs, valid
+
+def thresholds_editor(key, groups, defaults, group_label, unit):
+    """Umbrales por grupo: calificación 2 hasta «medio», 1 hasta «alto» y 0 por encima.
+    Actualiza en sitio los diccionarios de `groups` (parámetros de la sesión)."""
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.caption("Calificación 2 si el indicador es menor o igual al primer umbral, 1 si está entre ambos "
+                   "y 0 si supera el segundo.")
+    with c2:
+        reset_button(key, lambda: [groups[g].update(defaults[g]) for g in groups])
+    low_col, high_col = f"Calificación 2: hasta ({unit})", f"Calificación 0: más de ({unit})"
+    frame = pd.DataFrame({group_label: list(groups), low_col: [g["medio"] for g in groups.values()],
+                          high_col: [g["alto"] for g in groups.values()]})
+    edited = st.data_editor(frame, key=f"rie_editor_{key}", width="stretch", hide_index=True,
+        num_rows="fixed", disabled=[group_label], column_config={
+            c: st.column_config.NumberColumn(c, min_value=0.0, max_value=1000000000.0, step=0.1, format="%.2f", required=True)
+            for c in [low_col, high_col]})
+    lows = pd.to_numeric(edited[low_col], errors="coerce").to_numpy(dtype=float)
+    highs = pd.to_numeric(edited[high_col], errors="coerce").to_numpy(dtype=float)
+    valid = np.all(np.isfinite(lows)) and np.all(np.isfinite(highs)) and np.all(lows < highs)
+    if valid:
+        for g, low, high in zip(groups, lows, highs):
+            groups[g].update(medio=float(low), alto=float(high))
+    else:
+        st.warning("Revisa los umbrales: el de calificación 2 debe ser menor que el de calificación 0. "
+                   "Mientras tanto se aplican los últimos valores válidos.")
+    return (sorted(set(lows) | set(highs)) if valid else []), valid
+
+def param_input(label, name, cast, **kwargs):
+    """Campo numérico ligado a PARAMS[name] (compartido con las demás hojas)."""
+    st.number_input(label, **bind(f"rie_input_{name}", lambda: PARAMS[name],
+                                  lambda v: PARAMS.__setitem__(name, cast(v))), **kwargs)
+    return PARAMS[name]
 
 def classify_ranges(series, mins, maxs, scores, valid=True):
     values = pd.to_numeric(series, errors="coerce")
@@ -135,8 +180,7 @@ def classify_ranges(series, mins, maxs, scores, valid=True):
         result.loc[mask] = score
     return result
 
-# Perfil global. Las modificaciones no se guardan fuera de la sesión.
-# El botón borra el estado de los editores para volver a los rangos predeterminados.
+# Perfil global: solo filtra las distribuciones; los parámetros aplican a toda la base.
 profile_options = ["Todos"] + sorted(DATA["perfil_label"].dropna().astype(str).unique().tolist())
 profile = st.selectbox("Perfil", profile_options, key="rie_profile")
 VIEW = DATA if profile == "Todos" else DATA[DATA["perfil_label"].astype(str).eq(profile)]
@@ -145,9 +189,6 @@ VIEW = DATA if profile == "Todos" else DATA[DATA["perfil_label"].astype(str).eq(
 banner("Respaldo – LTV", "Relación entre el valor a financiar y el valor del vehículo (garantía).", "◈")
 license_ltv = st.radio("Tipo de licencia", ["Particular", "Público"], horizontal=True, key="rie_ltv_license")
 ltv_part = license_ltv == "Particular"
-ltv_defaults = ([70.0,75.0,85.0,100.0] if ltv_part else [75.0,80.0,90.0,100.0])
-ltv_min_default = [0.0] + ltv_defaults[:-1]
-ltv_max_default = ltv_defaults
 with st.container(border=True):
     left, center, right = st.columns([1.05,1.55,.72], gap="medium")
     with left:
@@ -156,7 +197,8 @@ with st.container(border=True):
             st.caption("Valor a financiar = ValorVh − MontoCtaInicial")
             st.caption("Equivalente: ValorVh × ((100 − cuota inicial %) / 100), si la cuota inicial está expresada como porcentaje.")
         st.markdown("**Reglas LTV (%)**")
-        ltv_mins, ltv_maxs, ltv_valid = editable_ranges(f"rie_ltv_ranges_{license_ltv}", [0,1,2,3], ltv_min_default, ltv_max_default, [3,2,1,0])
+        ltv_mins, ltv_maxs, ltv_valid = ranges_editor(f"ltv_{license_ltv}", PARAMS["ltv"][license_ltv],
+                                                      DEFAULT_PARAMS["ltv"][license_ltv], LTV_SCORES, "%")
     with center:
         st.markdown(f"**Distribución de LTV · {license_ltv}**")
         vehicle_value = field("ValorVh")
@@ -167,7 +209,7 @@ with st.container(border=True):
         ltv_view = ltv.loc[VIEW.index][license_mask]
         ltv_mapped = pd.Series(np.nan,index=ltv_view.index,dtype=float)
         if ltv_valid:
-            for lo, hi, score in zip(ltv_mins,ltv_maxs,[3,2,1,0]):
+            for lo, hi, score in zip(ltv_mins,ltv_maxs,LTV_SCORES):
                 mask=(ltv_view>=lo)&(ltv_view<=hi)
                 ltv_mapped.loc[mask]=score
         density_chart(ltv_view, "Distribución LTV", "LTV (%)", ltv_mins[1:], f"rie_ltv_density_{license_ltv}", license_ltv)
@@ -177,10 +219,13 @@ with st.container(border=True):
 
 # ---------------- Ingresos ----------------
 banner("Ingresos – PTI, DTI y EI", "Capacidad de pago a partir de la cuota del crédito, endeudamiento y monto financiado.", "▤")
-indicator = st.radio("Indicador", ["PTI", "DTI", "EI"], horizontal=True, key="rie_income_indicator")
+c_indicator, c_income_license = st.columns(2)
+indicator = c_indicator.radio("Indicador", ["PTI", "DTI", "EI"], horizontal=True, key="rie_income_indicator")
+income_license = c_income_license.radio("Tipo de licencia", list(LICENSES), horizontal=True, key="rie_income_license",
+    help="PTI y DTI tienen umbrales por licencia y estado civil; EI tiene un solo par de umbrales.")
 # El plazo no está disponible como campo en la base; se pide como parámetro de sesión para la fórmula de cuota.
 with st.expander("Fórmula y parámetros de la cuota mensual", expanded=False):
-    term_months = st.number_input("Plazo de financiación (meses)", min_value=1, max_value=120, value=60, step=1, key="rie_term_months")
+    term_months = param_input("Plazo de financiación (meses)", "plazo_meses", int, min_value=1, max_value=120, step=1)
     st.markdown("**Fórmula financiera de cuota fija (sistema francés)**")
     st.latex(r"C = P \cdot \frac{i(1+i)^n}{(1+i)^n-1}")
     st.markdown("Donde:")
@@ -194,31 +239,27 @@ dti = (payment + field("ValorCuotaSectorTelcos")).div(income.where(income > 0)).
 ei = principal.div(income.where(income > 0))
 metric_map = {"PTI": pti, "DTI": dti, "EI": ei}
 metric = metric_map[indicator]
-if indicator == "EI":
-    defaults_min, defaults_max = [0,12,18], [12,18,1000000]
-    scores = [2,1,0]
-    unit = "Veces"
-    description = "EI = Valor a financiar / ingresos"
-elif indicator == "PTI":
-    defaults_min, defaults_max = [0,30,40,50], [30,40,50,1000]
-    scores = [0,1,2,3]
-    unit = "%"
-    description = "PTI = Cuota mensual calculada / ingresos × 100"
-else:
-    defaults_min, defaults_max = [0,30,40,50], [30,40,50,1000]
-    scores = [0,1,2,3]
-    unit = "%"
-    description = "DTI = (Cuota mensual calculada + ValorCuotaSectorTelcos) / ingresos × 100"
+unit = "Veces" if indicator == "EI" else "%"
+description = {"PTI": "PTI = Cuota mensual calculada / ingresos × 100",
+               "DTI": "DTI = (Cuota mensual calculada + ValorCuotaSectorTelcos) / ingresos × 100",
+               "EI": "EI = Valor a financiar / ingresos"}[indicator]
 with st.container(border=True):
     left, center, right = st.columns([1.05,1.55,.72], gap="medium")
     with left:
         st.markdown(f"**Reglas {indicator}**")
         st.caption(description)
-        mins, maxs, valid_ranges = editable_ranges(f"rie_{indicator.lower()}_ranges", list(range(len(scores))), defaults_min, defaults_max, scores)
+        if indicator == "EI":
+            thresholds, valid_ranges = thresholds_editor("ei", {"Todas": PARAMS["ei"]}, {"Todas": DEFAULT_PARAMS["ei"]},
+                                                         "Licencia", "veces")
+        else:
+            group = indicator.lower()
+            thresholds, valid_ranges = thresholds_editor(f"{group}_{income_license}", PARAMS[group][income_license],
+                DEFAULT_PARAMS[group][income_license], "Estado civil", "%")
     with center:
-        st.markdown(f"**Distribución de {indicator}**")
-        thresholds = mins[1:] if valid_ranges else []
-        density_chart(metric.loc[VIEW.index], f"Distribución de {indicator}", f"{indicator} ({unit})", thresholds, f"rie_{indicator.lower()}_density")
+        st.markdown(f"**Distribución de {indicator} · {income_license}**")
+        income_license_mask = VIEW["licencia_vehiculo"].astype("string").str.upper().eq(LICENSES[income_license])
+        density_chart(metric.loc[VIEW.index][income_license_mask], f"Distribución de {indicator}", f"{indicator} ({unit})",
+                      thresholds, f"rie_{indicator.lower()}_density_{income_license}", income_license)
     with right:
         if indicator == "PTI":
             missing = payment.isna() | income.isna() | (income <= 0)
@@ -239,7 +280,7 @@ with st.container(border=True):
     left, center, right = st.columns([1.05,1.55,.72], gap="medium")
     with left:
         st.markdown("**Reglas de Experiencia**")
-        pct_max = st.number_input("Monto máximo sobre valor a financiar (%)", min_value=0.0, max_value=100.0, value=30.0, step=1.0, key="rie_experience_pct")
+        pct_max = param_input("Monto máximo sobre valor a financiar (%)", "experiencia_pct", float, min_value=0.0, max_value=100.0, step=1.0)
         exp_rules = pd.DataFrame({"Criterio":["Monto máximo solicitado", "Antigüedad de la obligación", "Calificación del monto máximo"],
             "Calificación RIE":[1,1,2],
             "Regla":[f"Monto máximo > {pct_max:.1f}% del valor a financiar", "Diferencia entre fecha de solicitud e inicio de obligación ≥ 1 año", "Calificación del monto máximo < 4 (categoría B)"]})
@@ -272,7 +313,7 @@ banner("Resultados del RIE", "Puntaje combinado mediante la normalización 3/7, 
 
 # Puntaje RIE (Motor_decision.pptx), calculado en src/rie.py para compartirlo con la hoja Árbol.
 all_licenses = DATA["licencia_vehiculo"].astype("string").str.upper()
-results = rie_scores(DATA, term_months=term_months, experience_pct=pct_max)
+results = rie_scores(DATA, PARAMS)
 results["Licencia"] = all_licenses
 results = results.loc[VIEW.index]
 
@@ -325,4 +366,6 @@ col3.metric("Público evaluables", format_n(int(valid_public)))
 st.caption("Los porcentajes de la tabla se calculan dentro de cada tipo de licencia y sobre los registros con puntaje RIE calculable. Los registros sin información suficiente se excluyen del denominador.")
 if all_licenses.eq("PUB").any():
     st.info("Supuesto provisional: se considera que la garantía 1 tiene licencia Pública, por lo que el requisito de garantía pública para Experiencia se toma como cumplido.")
-st.caption("Notas: las fechas faltantes o no válidas de FechaAperturaMontoMax se reemplazan temporalmente por la fecha de hoy para calcular Experiencia; por ello, esos registros no cumplirán el requisito de antigüedad mínima de un año. Los cambios de rangos y parámetros son temporales durante la sesión. Las calificaciones de PTI/DTI/EI aplican los umbrales de la PPT por licencia y estado civil. La normalización sigue la tabla de la PPT: puntajes 0–1→0, 2–3→1, 4–5→2 y 6–7→3. El plazo de financiación se mantiene en 60 meses por defecto hasta incorporar la variable al conjunto de datos.")
+st.caption("Notas: las fechas faltantes o no válidas de FechaAperturaMontoMax se reemplazan temporalmente por la fecha de hoy para calcular Experiencia; por ello, esos registros no cumplirán el requisito de antigüedad mínima de un año. Los rangos y parámetros editados se aplican en Árbol, Mitigantes y Decisión durante la sesión y se conservan al guardarlos como versión en la barra lateral. Las calificaciones de PTI/DTI/EI aplican los umbrales de la PPT por licencia y estado civil. La normalización sigue la tabla de la PPT: puntajes 0–1→0, 2–3→1, 4–5→2 y 6–7→3. El plazo de financiación se mantiene en 60 meses por defecto hasta incorporar la variable al conjunto de datos.")
+
+version_sidebar()

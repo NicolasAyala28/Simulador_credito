@@ -4,8 +4,8 @@ import streamlit as st
 
 from src.common import load_config
 from src.data_loader import load_data, prepare_data
-from src.decision import (A_ESTUDIO, APROBADO, FINAL_ORDER, SEGMENT_ORDER, SIN_DECISION, arbol_decisions,
-    credit_mitigants, final_decisions, mitigante_conditions)
+from src.decision import A_ESTUDIO, APROBADO, FINAL_ORDER, SEGMENT_ORDER, SIN_DECISION, credit_mitigants, final_decisions
+from src.parametros import arbol_decisions, mitigante_conditions, version_sidebar
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Decisión", page_icon="▦", layout="wide")
@@ -33,6 +33,7 @@ FINAL = final_decisions(DATA, arbol_decisions(), mitigante_conditions())
 total = len(FINAL)
 if not total:
     st.warning("No hay créditos con RIE calculable para asignar una decisión.")
+    version_sidebar()
     st.stop()
 counts = FINAL["decision_final"].value_counts().reindex(FINAL_ORDER, fill_value=0)
 # "Sin decisión" solo se muestra si hay créditos en esa situación.
@@ -85,8 +86,10 @@ st.dataframe(table.reset_index(names="Segmento"), width="stretch", hide_index=Tr
                    **{f"% {l}": st.column_config.NumberColumn(f"% {l}", format="%.1f%%") for l in labels}})
 note = (f"Base: {format_n(total)} créditos con RIE calculable y rama completa en el árbol. Las decisiones se toman de la "
         "columna Decisión de la hoja Árbol y de las condiciones (Avalista / Garantía) de la hoja Mitigantes: las de la "
-        "sesión si se editaron, o si no las guardadas.")
+        "versión activa (barra lateral) con los cambios hechos en la sesión.")
 if counts[SIN_DECISION]:
     note += (f" {format_n(counts[SIN_DECISION])} créditos quedan Sin decisión: su rama no tiene decisión en Árbol "
              "o tiene Condiciones sin mitigante exigido (0/0).")
 st.caption(note)
+
+version_sidebar()

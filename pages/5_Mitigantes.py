@@ -1,14 +1,13 @@
-import json
-
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from src.common import load_config
 from src.data_loader import load_data, prepare_data
-from src.decision import (A_ESTUDIO, APROBADO, CONDICIONES, CONDICIONES_PATH, CONDICIONES_STATE,
+from src.decision import (A_ESTUDIO, APROBADO, CONDICIONES,
     GARANTIA_MAX_ANTIGUEDAD, GARANTIA_MIN_COBERTURA, RIE_ORDER, SEGMENT_ORDER, LICENSE_ORDER, CONDITION_ORDER,
-    TREE_LEVELS, arbol_decisions, branch_key, credit_mitigants, final_decisions, mitigante_conditions, read_json)
+    TREE_LEVELS, branch_key, credit_mitigants, final_decisions)
+from src.parametros import arbol_decisions, mitigante_conditions, version_sidebar
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Mitigantes", page_icon="◫", layout="wide")
@@ -103,21 +102,10 @@ else:
     if changed:
         st.rerun()
 
-    c_save, c_reset = st.columns(2)
-    with c_save:
-        if st.button("Guardar condiciones", type="primary", width="stretch", key="mit_guardar_condiciones"):
-            with open(CONDICIONES_PATH, "w", encoding="utf-8") as f:
-                json.dump(conditions, f, ensure_ascii=False, indent=2)
-            st.success("Condiciones guardadas.")
-    with c_reset:
-        if st.button("Descartar cambios sin guardar", width="stretch", key="mit_descartar_condiciones"):
-            st.session_state[CONDICIONES_STATE] = read_json(CONDICIONES_PATH)
-            for k in [k for k in st.session_state if str(k).startswith("mit_condiciones_editor_")]:
-                del st.session_state[k]
-            st.rerun()
     st.caption("Avalista y Garantía (1/0) definen el mitigante exigido a cada rama: con un 1 se exige ese mitigante y con "
                "ambos en 1 se exigen los dos. Decisión - Cumple es el % de créditos de la rama que tienen los mitigantes "
-               "exigidos y Decisión - No cumple el resto. Las ramas con ambos en 0 no se evalúan.")
+               "exigidos y Decisión - No cumple el resto. Las ramas con ambos en 0 no se evalúan. Se guardan con "
+               "«Guardar como nueva versión» en la barra lateral.")
 
 # ---------------- Decisión final ----------------
 st.markdown('<div class="fa-section">Decisión final</div>', unsafe_allow_html=True)
@@ -131,3 +119,5 @@ st.caption(f"Porcentajes sobre {format_n(total_branched)} créditos del segmento
            "Aprobado: ramas con decisión Aprobado en Árbol más los créditos de ramas con Condiciones que cumplen los "
            "mitigantes exigidos. A estudio: ramas con decisión A estudio más los que no cumplen."
            + (f" {format_n(n_rest)} créditos quedan fuera: ramas sin decisión o con Condiciones en 0/0." if n_rest else ""))
+
+version_sidebar()

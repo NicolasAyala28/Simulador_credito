@@ -4,15 +4,13 @@
 2. En las ramas con "Condiciones", el crédito pasa a Aprobado si tiene los mitigantes
    exigidos a la rama en la hoja Mitigantes (avalista y/o garantía idóneos) y a A estudio si no.
 """
-import json
-
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from src.common import financed_amount, monthly_payment
-from src.data_loader import ROOT
-from src.rie import DEFAULT_EXPERIENCE_PCT, DEFAULT_TERM_MONTHS, rie_scores
+from src.parametros import A_ESTUDIO, APROBADO, CONDICIONES, rie_params
+from src.rie import rie_scores
 
 AVALISTAS = [1, 2, 3]
 GARANTIAS = [1, 2, 3]
@@ -29,23 +27,8 @@ RIE_ORDER = ["0-1", "2", "3"]
 LICENSE_ORDER = ["Particular", "Público"]
 CONDITION_ORDER = ["Nuevo", "Usado"]
 TREE_LEVELS = ["Segmento", "RIE", "Licencia", "Condición"]
-ARBOL_DECISION_PATH = ROOT / "config" / "arbol_decision.json"
-ARBOL_DECISION_STATE = "arbol_decisiones"
-APROBADO, CONDICIONES, A_ESTUDIO = "Aprobado", "Condiciones", "A estudio"
 SIN_DECISION = "Sin decisión"
 FINAL_ORDER = [APROBADO, A_ESTUDIO, SIN_DECISION]
-# Mitigante exigido a cada rama con "Condiciones" (1/0); se guarda en config/mitigantes_condiciones.json.
-CONDICIONES_PATH = ROOT / "config" / "mitigantes_condiciones.json"
-CONDICIONES_STATE = "mitigantes_condiciones"
-
-def read_json(path):
-    if path.exists():
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            pass
-    return {}
 
 def branch_key(values):
     return " | ".join(str(v) for v in values)
@@ -54,23 +37,13 @@ def tree_branch(series, order):
     values = series.astype("string").str.strip()
     return values.where(values.isin(order))
 
-def arbol_decisions():
-    """Decisiones de la hoja Árbol: las de la sesión si se abrió esa hoja; si no, las guardadas."""
-    return st.session_state.get(ARBOL_DECISION_STATE) or read_json(ARBOL_DECISION_PATH)
-
-def mitigante_conditions():
-    """Mitigantes exigidos por rama, compartidos en la sesión con la hoja Mitigantes."""
-    if CONDICIONES_STATE not in st.session_state:
-        st.session_state[CONDICIONES_STATE] = read_json(CONDICIONES_PATH)
-    return st.session_state[CONDICIONES_STATE]
-
 def credit_mitigants(data, aval_cfg, gar_cfg):
     """Agrega avalista_idoneo, garantia_idonea y la rama del árbol de cada crédito."""
     data = data.copy()
     data["valor_financiar"] = financed_amount(data)
-    # Mismo plazo que la hoja RIE en esta sesión: el plazo no viene en la base.
-    term_months = st.session_state.get("rie_term_months", DEFAULT_TERM_MONTHS)
-    data["cuota_calculada"] = monthly_payment(data, term_months)
+    # Mismos parámetros que la hoja RIE en esta sesión: el plazo no viene en la base.
+    params = rie_params()
+    data["cuota_calculada"] = monthly_payment(data, params["plazo_meses"])
 
     # Avalista idóneo: Acierta y capacidad de pago (ingreso / cuota) con los mínimos de config/avalista.json.
     aval_ok = pd.Series(False, index=data.index)
@@ -97,8 +70,7 @@ def credit_mitigants(data, aval_cfg, gar_cfg):
     data["garantia_idonea"] = eligible.gt(financiar * GARANTIA_MIN_COBERTURA).fillna(False)
 
     # Rama del árbol de cada crédito, con los mismos parámetros de RIE que la hoja RIE.
-    rie = rie_scores(data, term_months=term_months,
-        experience_pct=st.session_state.get("rie_experience_pct", DEFAULT_EXPERIENCE_PCT))
+    rie = rie_scores(data, params)
     data["Segmento"] = tree_branch(data["perfil_label"], SEGMENT_ORDER)
     data["RIE"] = rie["Normalización"].map(RIE_GROUPS)
     data["Licencia"] = tree_branch(data.get("licencia_label", pd.Series(pd.NA, index=data.index)), LICENSE_ORDER)

@@ -1,4 +1,3 @@
-import json
 import re
 
 import numpy as np
@@ -6,8 +5,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.data_loader import load_data, prepare_data, ROOT
-from src.rie import DEFAULT_EXPERIENCE_PCT, DEFAULT_TERM_MONTHS, rie_scores
+from src.data_loader import load_data, prepare_data
+from src.parametros import DECISION_OPTIONS, arbol_decisions, rie_params, version_sidebar
+from src.rie import rie_scores
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Árbol", page_icon="🌳", layout="wide")
@@ -34,11 +34,8 @@ LEVEL_COLORS = ["#064B39", "#087A55", "#43BD83", "#A4CE39"]
 # Filtro opcional: solo aparece activo si la base trae la columna.
 PERIODICIDAD_COL = "periodicidad_pago"
 PERIODICIDAD_SIN_DATO = "Sin dato"
-# Decisión asignada a cada rama del árbol; se guarda por rama en config/arbol_decision.json.
+# Decisión asignada a cada rama del árbol; se guarda con la versión de parámetros (barra lateral).
 DECISION_COL = "Decisión"
-DECISION_OPTIONS = ["Aprobado", "Condiciones", "A estudio"]
-DECISION_PATH = ROOT / "config" / "arbol_decision.json"
-DECISION_STATE = "arbol_decisiones"
 
 def slug(value):
     value = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(value).strip().casefold())
@@ -63,15 +60,6 @@ def mora_color(value, vmax):
 
 def branch_key(row):
     return " | ".join(str(row[l]) for l in TREE_LEVELS)
-
-def load_decisions():
-    if DECISION_PATH.exists():
-        try:
-            with open(DECISION_PATH, encoding="utf-8") as f:
-                return {k: v for k, v in json.load(f).items() if v in DECISION_OPTIONS}
-        except (OSError, ValueError):
-            pass
-    return {}
 
 st.markdown("""
 <div class="fa-hero" style="padding:17px 24px;min-height:0;margin-bottom:12px">
@@ -115,10 +103,8 @@ def tree_branch(series, order):
     values = series.astype("string").str.strip()
     return values.where(values.isin(order))
 
-# RIE con los mismos parámetros que la hoja RIE en esta sesión (plazo y % de Experiencia).
-rie = rie_scores(DATA,
-    term_months=st.session_state.get("rie_term_months", DEFAULT_TERM_MONTHS),
-    experience_pct=st.session_state.get("rie_experience_pct", DEFAULT_EXPERIENCE_PCT))
+# RIE con los parámetros editados en la hoja RIE en esta sesión (o los guardados).
+rie = rie_scores(DATA, rie_params())
 TREE = pd.DataFrame({
     "Segmento": tree_branch(DATA["perfil_label"], SEGMENT_ORDER),
     "RIE": rie["Normalización"].map(RIE_GROUPS),
@@ -186,6 +172,7 @@ else:
             TREE = TREE[TREE[level].isin(chosen)]
     if TREE.empty:
         st.warning("No hay ramas para los filtros de la tabla seleccionados.")
+        version_sidebar()
         st.stop()
     mora_cols = MORA_LABELS + ([MORA_SIN_DATO] if TREE["Mora"].eq(MORA_SIN_DATO).any() else [])
     for level, order in level_orders.items():
@@ -204,9 +191,7 @@ else:
         table[MORA_SIN_DATO] = counts[MORA_SIN_DATO].div(total_rama).mul(100)
     table = table.reset_index().astype({l: str for l in TREE_LEVELS})
     # Decisión editable por rama; la fila Total no lleva decisión.
-    if DECISION_STATE not in st.session_state:
-        st.session_state[DECISION_STATE] = load_decisions()
-    decisions = st.session_state[DECISION_STATE]
+    decisions = arbol_decisions()
     keys = table.apply(branch_key, axis=1)
     is_total = table["Segmento"].eq("Total")
     table.insert(len(TREE_LEVELS), DECISION_COL, [None if t else decisions.get(k) for k, t in zip(keys, is_total)])
@@ -217,8 +202,11 @@ else:
         .map(lambda v: mora_color(v, 100), subset=range_cols)
         .format("{:.1f}%", subset=pct_cols, na_rep=""))
     edited = st.data_editor(styled, width="stretch", hide_index=True, num_rows="fixed",
+        # El editor recuerda las ediciones por posición de fila: la llave cambia con todos los filtros
+        # para que una edición no pase a otra rama cuando cambian las filas de la tabla.
         height=min(38 + 35 * len(table), 720), key="arbol_tabla_editor_" + "_".join(
-            slug(",".join(st.session_state.get(f"arbol_tabla_{slug(l)}", []))) for l in TREE_LEVELS),
+            [slug(selected_profile), slug(min_age_label), slug(",".join(st.session_state.get("arbol_periodicidad", [])))]
+            + [slug(",".join(st.session_state.get(f"arbol_tabla_{slug(l)}", []))) for l in TREE_LEVELS]),
         disabled=[c for c in table.columns if c != DECISION_COL],
         column_config={DECISION_COL: st.column_config.SelectboxColumn(DECISION_COL, options=DECISION_OPTIONS),
                        "Créditos": st.column_config.NumberColumn("Créditos", format="localized"),
@@ -230,25 +218,13 @@ else:
             decisions[k] = v
         else:
             decisions.pop(k, None)
-    c_save, c_reset = st.columns(2)
-    with c_save:
-        if st.button("Guardar decisiones", type="primary", width="stretch", key="arbol_guardar_decisiones"):
-            with open(DECISION_PATH, "w", encoding="utf-8") as f:
-                json.dump(decisions, f, ensure_ascii=False, indent=2)
-            st.success(f"Decisiones guardadas ({len(decisions)} ramas).")
-    with c_reset:
-        if st.button("Descartar cambios sin guardar", width="stretch", key="arbol_descartar_decisiones"):
-            st.session_state[DECISION_STATE] = load_decisions()
-            for k in [k for k in st.session_state if str(k).startswith("arbol_tabla_editor_")]:
-                del st.session_state[k]
-            st.rerun()
     st.caption(f"{MORA_30}: créditos de la rama con mora máxima en los primeros 15 meses (mora_max_15m) mayor a 30 días, "
                "sobre el total de créditos de la rama. Los rangos 31–60 a 150+ muestran cómo se reparten esos créditos "
                "con mora > 30 (suman 100%; quedan vacíos si la rama no tiene mora > 30). Sin dato de mora es el % sobre "
                "el total de la rama. Los rangos incluyen el límite superior; 150+ es más de 150 días. "
                "RIE agrupa la normalización del puntaje: 0-1, 2 y 3. "
                f"{DECISION_COL}: elige Aprobado, Condiciones o A estudio por rama; se conserva al cambiar los filtros "
-               "y queda guardada con «Guardar decisiones». Colores (blanco → amarillo → rojo) en los rangos 31–60 a 150+: "
+               "y se guarda con «Guardar como nueva versión» en la barra lateral. Colores (blanco → amarillo → rojo) en los rangos 31–60 a 150+: "
                "el rojo es 100% de la mora > 30 de la rama concentrada en el rango.")
 
     # Tarjetas por decisión: créditos de las ramas de la tabla según su decisión, sobre el total de la tabla.
@@ -264,3 +240,5 @@ else:
     n_none = total_table - int(sum(c for c, d in zip(branch_credits, branch_decisions) if d in DECISION_OPTIONS))
     st.caption(f"Porcentajes sobre los {format_int(total_table)} créditos de la tabla (fila Total, con los filtros aplicados)."
                + (f" {format_int(n_none)} créditos están en ramas sin decisión asignada." if n_none else ""))
+
+version_sidebar()

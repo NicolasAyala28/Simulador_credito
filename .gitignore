@@ -11,3 +11,6 @@ data/*
 
 
 *_zrok.log
+# Versiones de parámetros guardadas por los usuarios; la versión 1 sí se versiona.
+config/versiones/*
+!config/versiones/base_v1.json
