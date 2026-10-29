@@ -62,3 +62,14 @@ Pendientes anotados:
 - En las ramas con Condiciones, el crédito pasa a Aprobado si cumple los mitigantes exigidos en la hoja Mitigantes y a A estudio si no.
 - Sin decisión: créditos de ramas sin decisión en Árbol o con Condiciones en 0/0.
 - La lógica es compartida con Mitigantes en `src/decision.py`. La base son los créditos con RIE calculable.
+
+## Páginas Cosechas · General y Cosechas · Segmento
+
+`pages/7_Cosechas_General.py` y `pages/7_Cosechas_Segmento.py` replican las secciones 3, 4.2, 5 y 6 del notebook `Score/default/default.ipynb`. Leen la base crédito-mes `data/cosechas_2022_092025_ST.parquet` (sin traslados, con `Avalista1Ocupacion`); los cálculos están en `src/cosechas.py`.
+
+- **Filtros:** mora medida (ICC 60 / ICC 90), que define el umbral de días de mora; cosechas; corte del ICC en la última altura completa de cada cosecha; y, en Segmento, los segmentos.
+- **Exclusiones:** créditos con algún corte anterior al desembolso (altura −1) y créditos con segmento *Sin dato* (misma segmentación que el resto del simulador).
+- **Cosecha:** ICC = saldo de capital con mora mayor al umbral ÷ desembolso de la cosecha, por altura. En Segmento, un panel por segmento y una línea por cosecha.
+- **Default (rodamientos):** roll rate por rango de mora anterior (transiciones entre meses consecutivos). Recuperación = el crédito baja de rango o se mantiene; Deterioro = sube. Se indica el rango desde el cual el deterioro supera a la recuperación. En Segmento, un panel por segmento con la recuperación y el deterioro de todas las cosechas seleccionadas y su rango de cruce.
+- **Acumulación por monto:** acumulación, por altura, del monto desembolsado de los créditos que superan el umbral por primera vez, sobre el monto con evento hasta el mes 24, con las cosechas 2022–2024. La tabla muestra el % del desembolso a 24 meses, la altura en que se acumula el 60 % y el 80 %, y lo capturado al mes 15. En Segmento, una línea por segmento más el total.
+- **Justificación:** en General, por qué el default de originación se define a 90 días y el de seguimiento a 60, con el deterioro y la cura desde 31–60 y 61–90. En Segmento, esos mismos indicadores por segmento.
