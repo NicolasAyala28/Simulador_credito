@@ -8,3 +8,6 @@ data/*
 
 .agent-logs
 .claude
+
+
+*_zrok.log
