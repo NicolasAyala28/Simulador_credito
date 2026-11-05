@@ -5,6 +5,9 @@ config/matrices/*.json
 data/*
 .python-version
 
+.env
+config/negacion.json
+config/*.xlsx
 
 .agent-logs
 .claude
