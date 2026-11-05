@@ -1,9 +1,10 @@
 """Parámetros editables compartidos entre hojas y sus versiones.
 
-Una versión reúne todo lo editable: parámetros RIE, decisión por rama del Árbol, niveles de
-apetito del Árbol (perfil, vehículo y matriz por productivo/consumo) y mitigantes exigidos en Mitigantes, porque dependen entre sí (el RIE define las ramas que reciben decisión).
+Una versión reúne todo lo editable: parámetros RIE, decisión por rama del árbol anterior, niveles de
+apetito de la hoja Apetito (perfil, vehículo y matriz por productivo/consumo) y mitigantes exigidos en Mitigantes, porque dependen entre sí (el RIE define las ramas que reciben decisión).
 
-- Al iniciar la sesión se carga la versión 1 (config/versiones/base_v1.json), que no se modifica.
+- Al iniciar la sesión se carga INITIAL_VERSION (hoy na_v4) o, si no existe, la versión 1
+  (config/versiones/base_v1.json), que no se modifica.
 - Lo editado vive en st.session_state con claves propias (no las de los widgets, que Streamlit
   borra al cambiar de hoja), así que se aplica en todas las hojas durante la sesión.
 - «Guardar como nueva versión» crea config/versiones/<usuario>_v<N>.json; nunca sobrescribe otro
@@ -25,12 +26,14 @@ from src.rie import DEFAULT_PARAMS
 
 VERSIONS_DIR = ROOT / "config" / "versiones"
 BASE_VERSION = "base_v1"
+# Versión que se carga al abrir la app (por instrucción del usuario); si el archivo no existe, se usa la base.
+INITIAL_VERSION = "na_v4"
 APROBADO, CONDICIONES, A_ESTUDIO = "Aprobado", "Condiciones", "A estudio"
 DECISION_OPTIONS = [APROBADO, CONDICIONES, A_ESTUDIO]
 # Mitigantes exigibles por rama (1/0); el FGA respalda la garantía.
 # desistir: la fila de detalle se envía a estudio sin evaluar mitigantes.
 MITIGANTES = ("avalista", "garantia", "fga", "desistir")
-# Niveles de apetito que el analista asigna en las matrices de perfil y vehículo de la hoja Árbol;
+# Niveles de apetito que el analista asigna en las matrices de perfil y vehículo de la hoja Apetito;
 # la matriz perfil x vehículo lleva una decisión de DECISION_OPTIONS.
 NIVELES = ["Bajo", "Medio", "Alto"]
 APETITO_MATRICES = ("perfil", "vehiculo", "matriz")
@@ -145,7 +148,7 @@ def apply_version(name):
 
 def ensure_session():
     if ACTIVE_STATE not in st.session_state:
-        apply_version(BASE_VERSION)
+        apply_version(INITIAL_VERSION if version_path(INITIAL_VERSION).exists() else BASE_VERSION)
 
 def pending_changes():
     content = load_version(st.session_state[ACTIVE_STATE])
@@ -190,7 +193,7 @@ def rie_params():
     return st.session_state[RIE_STATE]
 
 def arbol_decisions():
-    """Decisión por rama de la sesión (versión activa más lo editado en la hoja Árbol)."""
+    """Decisión por rama del árbol anterior (versión activa); la hoja Apetito ya no la edita."""
     ensure_session()
     return st.session_state[ARBOL_DECISION_STATE]
 
@@ -269,4 +272,6 @@ def version_sidebar():
             st.session_state[ACTIVE_STATE] = name
             st.session_state.pop("ver_nota", None)
             reload(f"Guardada como {name}.")
-        st.caption("Incluye los parámetros RIE, las decisiones y niveles de apetito del Árbol y los mitigantes por rama.")
+        st.caption("Incluye los parámetros RIE, las matrices de apetito y decisión de la hoja Apetito y los mitigantes por "
+                   "combinación y por detalle, tal como estén aplicados: lo editado en un formulario sin pulsar su botón "
+                   "de guardar no se incluye.")
