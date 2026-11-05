@@ -8,6 +8,7 @@ data/*
 .env
 config/negacion.json
 config/*.xlsx
+config/versiones/*
 
 .agent-logs
 .claude
