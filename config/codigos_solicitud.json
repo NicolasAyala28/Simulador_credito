@@ -1,0 +1,47 @@
+{
+  "descripcion": "Códigos de la solicitud (frank_requests) traducidos con el diccionario config/Variables Frank Oriana_v5.3.xlsx, hoja Variables de entrada.",
+  "ClaseVehiculo": {
+    "1": "AUTOMOVIL",
+    "2": "BUS / BUSETA / MICROBUS",
+    "3": "CAMION",
+    "4": "CAMIONETA PASAJ.",
+    "5": "CAMIONETA REPAR",
+    "6": "CAMPERO",
+    "7": "CARGADOR",
+    "8": "CARROTANQUE",
+    "9": "CHASIS",
+    "10": "CUATRIMOTO",
+    "11": "ENFARDADORA",
+    "12": "EXCAVADORA",
+    "13": "FURGON",
+    "14": "MAQUINARIA AGRICOLA",
+    "15": "MINI EXCAVADORA",
+    "16": "MINICARGADOR",
+    "17": "MOTO DE AGUA",
+    "18": "MOTOCARRO",
+    "19": "MOTOCICLETA",
+    "20": "PICKUP DOBLE CAB",
+    "21": "PICKUP SENCILLA",
+    "22": "REMOLCADOR",
+    "23": "REMOLQUE",
+    "24": "RETROCARGADOR",
+    "25": "RETROEXCAVADORA",
+    "26": "TRACTOR",
+    "27": "VIBROCOMPACTADORA",
+    "28": "VOLQUETA"
+  },
+  "EstadoCivil": {
+    "1": "Casado(a)",
+    "2": "Soltero(a)",
+    "3": "Union Libre",
+    "4": "Separado(a) / Viudo(a) / Divorciado(a)"
+  },
+  "Licencia": {
+    "1": "PAR",
+    "2": "PUB"
+  },
+  "Condicion": {
+    "1": "N",
+    "2": "U"
+  }
+}

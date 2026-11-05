@@ -8,7 +8,7 @@ import streamlit as st
 from src.common import financed_amount, monthly_payment
 from src.data_loader import load_data, prepare_data
 from src.parametros import bind, rie_params, version_sidebar
-from src.rie import DEFAULT_PARAMS, LICENSES, LTV_SCORES, rie_scores
+from src.rie import DEFAULT_PARAMS, LICENSES, LTV_SCORES, garantia_publica, rie_scores
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="RIE · Componentes y reglas", page_icon="◈", layout="wide")
@@ -223,14 +223,15 @@ c_indicator, c_income_license = st.columns(2)
 indicator = c_indicator.radio("Indicador", ["PTI", "DTI", "EI"], horizontal=True, key="rie_income_indicator")
 income_license = c_income_license.radio("Tipo de licencia", list(LICENSES), horizontal=True, key="rie_income_license",
     help="PTI y DTI tienen umbrales por licencia y estado civil; EI tiene un solo par de umbrales.")
-# El plazo no está disponible como campo en la base; se pide como parámetro de sesión para la fórmula de cuota.
+# El plazo es el de la solicitud (PlazoMeses); el parámetro solo se usa cuando la solicitud no lo trae.
 with st.expander("Fórmula y parámetros de la cuota mensual", expanded=False):
-    term_months = param_input("Plazo de financiación (meses)", "plazo_meses", int, min_value=1, max_value=120, step=1)
+    term_months = param_input("Plazo por defecto (meses, solo si la solicitud no trae PlazoMeses)", "plazo_meses", int,
+                              min_value=1, max_value=120, step=1)
     st.markdown("**Fórmula financiera de cuota fija (sistema francés)**")
     st.latex(r"C = P \cdot \frac{i(1+i)^n}{(1+i)^n-1}")
     st.markdown("Donde:")
-    st.markdown("- **C:** cuota mensual calculada.\n- **P:** valor a financiar = `ValorVh - MontoCtaInicial`.\n- **i:** tasa de interés mensual = `tasa_nominal / 100` (la tasa nominal de la base ya es mensual).\n- **n:** plazo en meses; por ahora, **60 meses por defecto**.")
-    st.caption("La tasa_nominal se interpreta como tasa mensual. Si la tasa es 0 %, la cuota se calcula como P / n. El plazo se mantiene editable durante esta etapa y se reemplazará por la variable del conjunto de datos cuando esté disponible.")
+    st.markdown("- **C:** cuota mensual calculada.\n- **P:** valor a financiar = `ValorVh - MontoCtaInicial`.\n- **i:** tasa de interés mensual = `tasa_nominal / 100` (la tasa nominal de la base ya es mensual).\n- **n:** plazo real de la solicitud (`PlazoMeses`); si no viene, el plazo por defecto.")
+    st.caption("La tasa (TasaMV de la solicitud) ya viene mensual, en %. Si la tasa es 0 %, la cuota se calcula como P / n.")
 principal = financed_amount(DATA)
 payment = monthly_payment(DATA, term_months)
 income = field("ingresos")
@@ -364,8 +365,17 @@ col1.metric("Registros con puntaje calculable", format_n(int(results["Puntaje"].
 col2.metric("Particular evaluables", format_n(int(valid_particular)))
 col3.metric("Público evaluables", format_n(int(valid_public)))
 st.caption("Los porcentajes de la tabla se calculan dentro de cada tipo de licencia y sobre los registros con puntaje RIE calculable. Los registros sin información suficiente se excluyen del denominador.")
-if all_licenses.eq("PUB").any():
-    st.info("Supuesto provisional: se considera que la garantía 1 tiene licencia Pública, por lo que el requisito de garantía pública para Experiencia se toma como cumplido.")
-st.caption("Notas: las fechas faltantes o no válidas de FechaAperturaMontoMax se reemplazan temporalmente por la fecha de hoy para calcular Experiencia; por ello, esos registros no cumplirán el requisito de antigüedad mínima de un año. Los rangos y parámetros editados se aplican en Árbol, Mitigantes y Decisión durante la sesión y se conservan al guardarlos como versión en la barra lateral. Las calificaciones de PTI/DTI/EI aplican los umbrales de la PPT por licencia y estado civil. La normalización sigue la tabla de la PPT: puntajes 0–1→0, 2–3→1, 4–5→2 y 6–7→3. El plazo de financiación se mantiene en 60 meses por defecto hasta incorporar la variable al conjunto de datos.")
+if all_licenses.loc[VIEW.index].eq("PUB").any():
+    public_guarantee = garantia_publica(DATA)
+    if public_guarantee is None:
+        st.info("La base no trae el servicio de las garantías (RPV1Servicio a RPV3Servicio): para licencia Pública "
+                "el requisito de garantía pública de Experiencia se toma como cumplido.")
+    else:
+        pub = all_licenses.loc[VIEW.index].eq("PUB")
+        n_pub, n_gar = int(pub.sum()), int((pub & public_guarantee.loc[VIEW.index]).sum())
+        st.info(f"Experiencia en licencia Pública: además de los tres criterios, alguna garantía (RPV1 a RPV3) debe ser "
+                f"de servicio público. {format_n(n_gar)} de {format_n(n_pub)} créditos públicos "
+                f"({n_gar / n_pub * 100:.1f}%) la tienen; el resto no suma el punto de Experiencia.")
+st.caption("Notas: las fechas faltantes o no válidas de FechaAperturaMontoMax se reemplazan temporalmente por la fecha de hoy para calcular Experiencia; por ello, esos registros no cumplirán el requisito de antigüedad mínima de un año. Los rangos y parámetros editados se aplican en Árbol, Mitigantes y Decisión durante la sesión y se conservan al guardarlos como versión en la barra lateral. Las calificaciones de PTI/DTI/EI aplican los umbrales de la PPT por licencia y estado civil. La normalización sigue la tabla de la PPT: puntajes 0–1→0, 2–3→1, 4–5→2 y 6–7→3. La cuota usa el plazo real de cada solicitud (PlazoMeses) y la tasa mensual (TasaMV).")
 
 version_sidebar()

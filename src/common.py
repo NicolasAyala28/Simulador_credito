@@ -97,7 +97,7 @@ def numeric_columns(df):
     return [c for c in df.select_dtypes(include="number").columns if df[c].nunique(dropna=True) > 1]
 
 def category_column_selector(df, key, default=None):
-    candidates = [c for c in ["perfil_label", "ocupacion_agg", "condicion_label", "licencia_label", "FrankDecision", "clase_fasecolda", "productivo", "FGA"] if c in df.columns]
+    candidates = [c for c in ["perfil_label", "ocupacion_agg", "condicion_label", "licencia_label", "FrankDecision", "clase_vehiculo", "productivo"] if c in df.columns]
     if not candidates:
         candidates = [c for c in df.columns if df[c].nunique(dropna=True) < 30]
     if not candidates:
@@ -165,16 +165,25 @@ def financed_amount(df):
     return (vehicle - down_payment).where(vehicle > 0)
 
 
+def loan_term(df, default_months):
+    """Plazo en meses de cada crédito: PlazoMeses de la solicitud cuando es mayor a 0; si falta, default_months."""
+    term = pd.to_numeric(df.get("PlazoMeses", pd.Series(np.nan, index=df.index)), errors="coerce")
+    return term.where(term > 0, default_months).astype(float)
+
 def monthly_payment(df, term_months):
-    """Cuota fija (sistema francés) con tasa_nominal mensual en %: PMT = P*r / (1-(1+r)^(-n)); con tasa cero, P/n."""
+    """Cuota fija (sistema francés) con tasa_nominal mensual en %: PMT = P*r / (1-(1+r)^(-n)); con tasa cero, P/n.
+    n es el plazo real (PlazoMeses) y term_months solo se usa cuando la solicitud no lo trae."""
     principal = financed_amount(df)
+    term_months = loan_term(df, term_months)
+    # La tasa ya viene mensual (TasaMV de la solicitud), en porcentaje.
     rate = pd.to_numeric(df["tasa_nominal"], errors="coerce") / 100.0
     payment = pd.Series(np.nan, index=df.index, dtype=float)
     valid = principal.notna() & (principal > 0) & rate.notna() & (rate >= 0)
     nonzero = valid & rate.gt(0)
     zero = valid & rate.eq(0)
-    payment.loc[nonzero] = principal.loc[nonzero] * rate.loc[nonzero] / (1 - (1 + rate.loc[nonzero]) ** (-term_months))
-    payment.loc[zero] = principal.loc[zero] / term_months
+    payment.loc[nonzero] = (principal.loc[nonzero] * rate.loc[nonzero]
+                            / (1 - (1 + rate.loc[nonzero]) ** (-term_months.loc[nonzero])))
+    payment.loc[zero] = principal.loc[zero] / term_months.loc[zero]
     return payment
 
 
