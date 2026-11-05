@@ -29,6 +29,8 @@ DEFAULT_PARAMS = {
 # Tabla de normalización literal de página 9: 0-1=>0, 2-3=>1, 4-5=>2, 6-7=>3.
 NORMALIZATION_MAP = {0: 0, 1: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 3}
 CATEGORY_MAP = {0: "AE", 1: "A", 2: "AA", 3: "AA"}
+# Servicio de cada garantía (frank_requests); define el requisito de garantía pública de Experiencia.
+GARANTIA_SERVICIO_COLS = ["RPV1Servicio", "RPV2Servicio", "RPV3Servicio"]
 
 def num(series):
     if pd.api.types.is_numeric_dtype(series):
@@ -37,6 +39,18 @@ def num(series):
     # En esta base las comas de campos monetarios suelen ser separadores de miles.
     s = s.str.replace(",", "", regex=False)
     return pd.to_numeric(s, errors="coerce")
+
+def garantia_publica(data):
+    """True si alguna garantía es de servicio público (valor que empieza por PUB, con o sin tilde).
+    None si la base no trae ninguna columna RPV{i}Servicio."""
+    cols = [c for c in GARANTIA_SERVICIO_COLS if c in data]
+    if not cols:
+        return None
+    out = pd.Series(False, index=data.index)
+    for col in cols:
+        servicio = data[col].astype("string").str.strip().str.upper().str.replace("Ú", "U", regex=False)
+        out |= servicio.str.startswith("PUB").fillna(False)
+    return out
 
 def rie_scores(data, params=None):
     """Devuelve un DataFrame con Puntaje (0-7), Normalización (0-3) y Categoría (AA/A/AE).
@@ -100,9 +114,9 @@ def rie_scores(data, params=None):
     income_component = (income_scores.mean(axis=1, skipna=False) * 1.5)
 
     # Experiencia: según página 13, deben cumplirse los criterios de monto >30% del
-    # valor a financiar, antigüedad >=1 año y calificación <4. Por instrucción del usuario,
-    # se asume provisionalmente que la garantía 1 tiene licencia Pública; por tanto, el
-    # requisito adicional de garantía pública se considera cumplido para el segmento Público.
+    # valor a financiar, antigüedad >=1 año y calificación <4. Con licencia Pública, además,
+    # alguna garantía (RPV1-RPV3) debe ser de servicio público. Si la base no trae el servicio
+    # de las garantías, se mantiene el supuesto anterior: el requisito se da por cumplido.
     max_amount_all = field("MontoMaxSolicGeneral")
     exp_ratio_all = max_amount_all.div(principal.where(principal > 0)).mul(100)
     date_request_all = pd.to_datetime(data.get("FechaProceso", pd.Series(pd.NaT, index=data.index)), format="mixed", errors="coerce")
@@ -116,6 +130,9 @@ def rie_scores(data, params=None):
     exp_rating_ok = rating_all.lt(4)
     exp_eval = exp_ratio_all.notna() & date_request_all.notna() & date_open_all.notna() & date_open_all.dt.year.gt(1901) & rating_all.notna() & principal.gt(0)
     exp_pass = exp_amount_ok & exp_age_ok & exp_rating_ok
+    public_guarantee = garantia_publica(data)
+    if public_guarantee is not None:
+        exp_pass &= all_licenses.ne("PUB").fillna(True) | public_guarantee
     experience_component = pd.Series(np.where(exp_eval, exp_pass.astype(float), np.nan), index=data.index, dtype=float)
 
     score_total = ltv_score_all + income_component + experience_component

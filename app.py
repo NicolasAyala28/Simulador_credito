@@ -1,5 +1,5 @@
 import streamlit as st
-from src.data_loader import load_data, prepare_data
+from src.data_loader import load_data, prepare_data, study_periods
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Simulador de crédito vehicular", page_icon="🚘", layout="wide")
@@ -15,12 +15,10 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-period = "No identificado"
-if "fecha_desembolso" in df and df["fecha_desembolso"].notna().any():
-    period = f"{df['fecha_desembolso'].min():%b %Y} – {df['fecha_desembolso'].max():%b %Y}"
-
-a, b, c = st.columns(3, gap="medium")
-a.metric("Periodo de estudio", period)
+periodo_sol, periodo_des = study_periods(df)
+a, d, b, c = st.columns(4, gap="medium")
+a.metric("Periodo de solicitudes", periodo_sol)
+d.metric("Periodo de desembolsos", periodo_des)
 b.metric("Registros disponibles", f"{len(df):,}".replace(",", "."))
 c.metric("Variables disponibles", f"{len(df.columns):,}".replace(",", "."))
 

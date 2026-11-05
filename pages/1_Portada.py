@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from src.data_loader import load_data, prepare_data
+from src.data_loader import load_data, prepare_data, study_periods
 
 st.set_page_config(page_title="Portada", page_icon="🚘", layout="wide")
 from src.theme import apply_finanzauto_theme
@@ -11,13 +11,13 @@ st.title("1. Portada")
 st.write("Resumen de la base de estudio, periodo, volumen de registros y auditoría de calidad de datos.")
 
 # Periodo y volumen
-if "fecha_desembolso" in df.columns and df["fecha_desembolso"].notna().any():
-    dates = df["fecha_desembolso"].dropna()
-    periodo = f"{dates.min():%Y-%m} a {dates.max():%Y-%m}"
-else:
-    periodo = "No identificado"
-c1, c2, c3 = st.columns(3)
-c1.metric("Periodo de estudio", periodo)
+periodo_sol, periodo_des = study_periods(df)
+if df.attrs.get("excluidas_financiacion"):
+    st.info(f"Se omiten {df.attrs['excluidas_financiacion']:,} solicitudes con valor a financiar mayor a 180 millones "
+            "(fuera del alcance del estudio).".replace(",", "."))
+c1, c4, c2, c3 = st.columns(4)
+c1.metric("Periodo de solicitudes", periodo_sol)
+c4.metric("Periodo de desembolsos", periodo_des)
 c2.metric("Cantidad de registros", f"{len(df):,}".replace(",", "."))
 c3.metric("Cantidad de variables", f"{len(df.columns):,}".replace(",", "."))
 

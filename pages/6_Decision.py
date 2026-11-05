@@ -4,8 +4,9 @@ import streamlit as st
 
 from src.common import load_config
 from src.data_loader import load_data, prepare_data
-from src.decision import A_ESTUDIO, APROBADO, FINAL_ORDER, SEGMENT_ORDER, SIN_DECISION, credit_mitigants, final_decisions
-from src.parametros import arbol_decisions, mitigante_conditions, version_sidebar
+from src.apetito import add_apetito, percentil_acierta, seed_defaults
+from src.decision import A_ESTUDIO, APROBADO, FINAL_ORDER, SEGMENT_ORDER, SIN_DECISION, credit_mitigants, matrix_decisions
+from src.parametros import apetito_levels, mitigante_conditions, version_sidebar
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Decisión", page_icon="▦", layout="wide")
@@ -22,17 +23,23 @@ st.markdown("""
 <div class="fa-hero" style="padding:17px 24px;min-height:0;margin-bottom:12px">
   <div class="eyebrow">Finanzauto · Motor de decisión</div>
   <h1 style="font-size:27px">Decisión final</h1>
-  <p>Decisión de cada crédito luego de mitigantes: la de su rama en el árbol y, en las ramas con "Condiciones",
-  Aprobado si cumple los mitigantes exigidos y A estudio si no.</p>
+  <p>Decisión de cada crédito luego de mitigantes: Aprobado y A estudio según su celda de la matriz perfil × vehículo
+  de la hoja Árbol y, en las celdas con "Condiciones", Aprobado si cumple los mitigantes exigidos en Mitigantes y A estudio si no.</p>
 </div>
 """, unsafe_allow_html=True)
 
-DATA = credit_mitigants(prepare_data(load_data()).reset_index(drop=True),
-                        load_config("avalista"), load_config("garantia"))
-FINAL = final_decisions(DATA, arbol_decisions(), mitigante_conditions())
+# Misma base y reglas que Mitigantes: combinación (tipo, nivel perfil, nivel vehículo) de cada crédito,
+# decisión de su celda en la matriz de la hoja Árbol y mitigantes exigidos en la hoja Mitigantes.
+PREPARED = prepare_data(load_data()).reset_index(drop=True)
+MITIGATED = credit_mitigants(PREPARED, load_config("avalista"), load_config("garantia"))
+MITIGATED["percentil_acierta"] = percentil_acierta(MITIGATED)
+seed_defaults(apetito_levels(), SEGMENT_ORDER, MITIGATED.assign(Percentil=MITIGATED["percentil_acierta"]))
+DATA = add_apetito(MITIGATED, apetito_levels())
+FINAL = matrix_decisions(DATA, apetito_levels()["matriz"], mitigante_conditions())
 total = len(FINAL)
+n_out = len(DATA) - total
 if not total:
-    st.warning("No hay créditos con RIE calculable para asignar una decisión.")
+    st.warning("No hay créditos con combinación perfil × vehículo completa para asignar una decisión.")
     version_sidebar()
     st.stop()
 counts = FINAL["decision_final"].value_counts().reindex(FINAL_ORDER, fill_value=0)
@@ -84,12 +91,16 @@ for label in labels:
 st.dataframe(table.reset_index(names="Segmento"), width="stretch", hide_index=True,
     column_config={**{c: st.column_config.NumberColumn(c, format="localized") for c in ["Créditos"] + labels},
                    **{f"% {l}": st.column_config.NumberColumn(f"% {l}", format="%.1f%%") for l in labels}})
-note = (f"Base: {format_n(total)} créditos con RIE calculable y rama completa en el árbol. Las decisiones se toman de la "
-        "columna Decisión de la hoja Árbol y de las condiciones (Avalista / Garantía) de la hoja Mitigantes: las de la "
-        "versión activa (barra lateral) con los cambios hechos en la sesión.")
+note = (f"Base: {format_n(total)} créditos con combinación completa (tipo productivo/consumo, nivel perfil y nivel "
+        "vehículo). Aprobado y A estudio salen de la matriz perfil × vehículo de la hoja Árbol; en las celdas con "
+        "Condiciones, el crédito queda Aprobado si cumple los mitigantes exigidos en la hoja Mitigantes (Avalista / "
+        "Garantía / FGA, con los datos de la solicitud) y A estudio si no. Se usan los valores de la versión activa (barra lateral) con los cambios de la sesión.")
 if counts[SIN_DECISION]:
-    note += (f" {format_n(counts[SIN_DECISION])} créditos quedan Sin decisión: su rama no tiene decisión en Árbol "
+    note += (f" {format_n(counts[SIN_DECISION])} créditos quedan Sin decisión: su celda no tiene decisión en Árbol "
              "o tiene Condiciones sin mitigante exigido (0/0).")
+if n_out:
+    note += (f" {format_n(n_out)} créditos no entran: sin RIE calculable, sin nivel de perfil o de vehículo, "
+             "o sin dato de productivo.")
 st.caption(note)
 
 version_sidebar()

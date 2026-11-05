@@ -11,19 +11,18 @@ apply_finanzauto_theme()
 
 NUMERIC_VARS = [
     ("acierta", "Acierta"),
-    ("Frank", "Frank"),
     ("ingresos", "Ingresos"),
     ("cuota_inicial", "Cuota inicial"),
     ("ValorVh", "Valor del vehículo"),
-    ("NumeroConsultas", "Número de consultas"),
 ]
 CATEGORICAL_VARS = [
     ("estado_civil", "Estado civil"),
     ("licencia_label", "Tipo de licencia"),
     ("condicion_label", "Condición del vehículo"),
+    ("veh", "Licencia / condición"),
     ("productivo", "Productivo"),
     ("PlanFinanciacion", "Plan de financiación"),
-    ("clase_fasecolda", "Clase vehículo"),
+    ("clase_vehiculo", "Clase de vehículo"),
     # ("periodicidad_pago", "Periodicidad pago"),
 ]
 
@@ -95,9 +94,10 @@ def format_number(x):
     return f"{x:.1f}"
 
 st.markdown('<h3 class="section-title">Variables numéricas</h3>', unsafe_allow_html=True)
-numeric_cols = st.columns(3, gap="small")
+# Cuadrícula de 2 x 2: una fila de dos columnas por cada par de variables numéricas.
+numeric_cols = [c for _ in range(0, len(NUMERIC_VARS), 2) for c in st.columns(2, gap="small")]
 for i, (col, label) in enumerate(NUMERIC_VARS):
-    with numeric_cols[i % 3]:
+    with numeric_cols[i]:
         with st.container(border=True):
             st.markdown(f"**{label}**")
             if col not in filtered.columns:
