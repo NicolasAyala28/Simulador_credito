@@ -4,7 +4,7 @@ import plotly.express as px
 
 from src.distribucion import GREEN_PALETTE, GRID, PAGE_STYLE, TEXT, format_n, load_distribution_data, year_filter
 
-st.set_page_config(page_title="Distribución de variables", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Población: gráficas", page_icon="📊", layout="wide")
 
 from src.theme import apply_finanzauto_theme
 apply_finanzauto_theme()

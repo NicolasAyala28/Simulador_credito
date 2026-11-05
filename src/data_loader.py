@@ -171,16 +171,21 @@ def clean_data(df):
         df["ingresos"] = df["ingresos"].where(df["ingresos"].between(INGRESO_MIN, INGRESO_MAX))
     return df.drop(columns=[c for c in DROP_COLUMNS if c in df.columns])
 
-# Alcance del estudio: se omiten las solicitudes con valor a financiar (ValorVh - MontoCtaInicial) mayor a este
-# monto, por instrucción del usuario. df.attrs["excluidas_financiacion"] guarda cuántas se omitieron.
+# Alcance del estudio, por instrucción del usuario: se omiten las solicitudes con valor a financiar
+# (ValorVh - MontoCtaInicial) mayor a MAX_FINANCIACION o menor a MIN_FINANCIACION (incluye los negativos).
+# df.attrs guarda cuántas se omitieron; exclusion_notes las describe para las notas de las hojas.
 MAX_FINANCIACION = 180_000_000
+MIN_FINANCIACION = 10_000_000
 
 def prepare_data(df, incluir_sin_dato=False):
     df = clean_data(df)
     financiar = pd.to_numeric(df.get("ValorVh"), errors="coerce") - pd.to_numeric(df.get("MontoCtaInicial"), errors="coerce")
-    fuera = financiar.gt(MAX_FINANCIACION).fillna(False)
-    df = df[~fuera].copy()
-    df.attrs["excluidas_financiacion"] = int(fuera.sum())
+    alta = financiar.gt(MAX_FINANCIACION).fillna(False)
+    baja = financiar.lt(MIN_FINANCIACION).fillna(False)
+    df = df[~(alta | baja)].copy()
+    df.attrs["excluidas_financiacion"] = int(alta.sum())
+    df.attrs["excluidas_financiacion_baja"] = int(baja.sum())
+    df.attrs["excluidas_financiacion_negativa"] = int(financiar.lt(0).fillna(False).sum())
     if "id_fecha_desembolso" in df.columns:
         raw = df["id_fecha_desembolso"].astype("string").str.replace(r"\.0$", "", regex=True)
         df["fecha_desembolso"] = pd.to_datetime(raw, format="%Y%m%d", errors="coerce")
@@ -243,3 +248,17 @@ def study_periods(df):
         rango = _rango_meses(df.loc[desembolsadas, "FechaProceso"])
         desembolsos = f"{rango} (fecha de solicitud)" if rango else None
     return solicitudes or "No identificado", desembolsos or "No identificado"
+
+def exclusion_notes(attrs):
+    """Notas sobre las solicitudes omitidas por el alcance del estudio (valor a financiar)."""
+    fmt = lambda n: f"{int(n):,}".replace(",", ".")
+    notas = []
+    if attrs.get("excluidas_financiacion"):
+        notas.append(f"Se omiten {fmt(attrs['excluidas_financiacion'])} solicitudes con valor a financiar mayor a "
+                     f"{fmt(MAX_FINANCIACION / 1e6)} millones (fuera del alcance del estudio).")
+    if attrs.get("excluidas_financiacion_baja"):
+        neg = attrs.get("excluidas_financiacion_negativa", 0)
+        notas.append(f"Se omiten {fmt(attrs['excluidas_financiacion_baja'])} solicitudes con valor a financiar menor a "
+                     f"{fmt(MIN_FINANCIACION / 1e6)} millones" + (f", de ellas {fmt(neg)} con valor negativo "
+                     "(cuota inicial mayor que el valor del vehículo)" if neg else "") + ".")
+    return notas

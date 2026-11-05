@@ -1,11 +1,11 @@
-"""Decisión final por crédito, compartida por las hojas Mitigantes y Decisión.
+"""Decisión final por crédito, compartida por las hojas Mitigantes y Decisión final.
 
-1. Rama del árbol (Segmento, RIE, Licencia, Condición) y su decisión en la hoja Árbol.
+1. Rama del árbol anterior (Segmento, RIE, Licencia, Condición) y su decisión; hoy solo la usa final_decisions.
 2. En las ramas con "Condiciones", el crédito pasa a Aprobado si tiene todos los mitigantes
    exigidos en la hoja Mitigantes y a A estudio si no. Los mitigantes se evalúan con los datos de la
    solicitud: avalista 1 idóneo, garantías (RPV1-RPV3) idóneas y FGA.
 La misma regla se aplica a las combinaciones de la matriz perfil x vehículo (src/apetito.py):
-la decisión sale de la matriz de productivos o de consumo de la hoja Árbol.
+la decisión sale de la matriz de productivos o de consumo de la hoja Apetito.
 """
 import numpy as np
 import pandas as pd
@@ -23,7 +23,7 @@ GARANTIA_MAX_ANTIGUEDAD = 10
 # El crédito tiene garantía idónea si sus garantías idóneas suman más de este % del valor a financiar.
 GARANTIA_MIN_COBERTURA = 0.5
 
-# Ramas del árbol: mismas reglas y llaves que la hoja Árbol.
+# Ramas del árbol anterior (Segmento, RIE, Licencia, Condición).
 SEGMENT_ORDER = ["Empleado", "Independiente Formal", "Independiente Informal", "Transportador"]
 RIE_GROUPS = {0: "0-1", 1: "0-1", 2: "2", 3: "3"}
 RIE_ORDER = ["0-1", "2", "3"]
@@ -88,29 +88,32 @@ def credit_mitigants(data, aval_cfg, gar_cfg):
 
 def meets(frame, need):
     """True/False si el crédito tiene los mitigantes exigidos; None si la rama o combinación no exige ninguno.
-    Avalista: avalista 1 idóneo. Garantía: garantía idónea o, si la combinación tiene FGA en 1, FGA (se puede
-    pedir siempre). El FGA solo reemplaza a la garantía: con Garantía en 0 no tiene efecto.
-    Con desistir en 1 no cumple nunca: la fila se envía a estudio."""
+    Avalista: avalista 1 idóneo. Garantía: garantía idónea o, si además FGA está en 1, FGA. FGA solo (sin
+    Garantía): se exige FGA. Con desistir en 1 no cumple nunca: la fila se envía a estudio."""
     if int(need.get("desistir", 0)):
         return pd.Series(False, index=frame.index, dtype="boolean")
-    need_aval, need_gar = int(need.get("avalista", 0)), int(need.get("garantia", 0))
-    if not (need_aval or need_gar):
+    need_aval, need_gar, need_fga = (int(need.get(k, 0)) for k in ("avalista", "garantia", "fga"))
+    if not (need_aval or need_gar or need_fga):
         return pd.Series(pd.NA, index=frame.index, dtype="boolean")
     ok = pd.Series(True, index=frame.index)
     if need_aval:
         ok &= frame["avalista_idoneo"]
     if need_gar:
-        ok &= frame["garantia_idonea"] | (frame["fga"] if int(need.get("fga", 0)) else False)
+        ok &= frame["garantia_idonea"] | (frame["fga"] if need_fga else False)
+    elif need_fga:
+        ok &= frame["fga"]
     return ok.astype("boolean")
 
 def meets_by_fga(frame, need):
-    """Solicitudes que cumplen solo gracias al FGA: cumplen sin tener garantía idónea."""
-    if not (int(need.get("garantia", 0)) and int(need.get("fga", 0))):
+    """Solicitudes que cumplen gracias al FGA: con Garantía y FGA, las que no tienen garantía idónea; con FGA solo,
+    todas las que cumplen."""
+    if not int(need.get("fga", 0)):
         return pd.Series(False, index=frame.index)
-    return meets(frame, need).fillna(False).astype(bool) & ~frame["garantia_idonea"]
+    cumple = meets(frame, need).fillna(False).astype(bool)
+    return cumple & ~frame["garantia_idonea"] if int(need.get("garantia", 0)) else cumple
 
 def final_decisions(data, decisions, conditions):
-    """Créditos con rama completa (RIE calculable), con su decisión en Árbol (decision_arbol),
+    """Créditos con rama completa (RIE calculable), con su decisión en el árbol anterior (decision_arbol),
     si cumplen los mitigantes exigidos (cumple), si cumplen solo por el FGA (cumple_por_fga)
     y la decisión final (decision_final)."""
     branched = data.dropna(subset=TREE_LEVELS).copy()
@@ -119,7 +122,7 @@ def final_decisions(data, decisions, conditions):
 
 def matrix_decisions(data, decisions, conditions):
     """Igual que final_decisions, pero por combinación (tipo, nivel perfil, nivel vehículo) de la
-    matriz de la hoja Árbol. Solo entran los créditos con combinación completa (columna Combinación)."""
+    matriz de la hoja Apetito. Solo entran los créditos con combinación completa (columna Combinación)."""
     combined = data.dropna(subset=["Combinación"]).copy()
     combined["rama"] = combined["Combinación"]
     # Los mitigantes se pueden exigir por combinación o por detalle (licencia/condición y RIE);

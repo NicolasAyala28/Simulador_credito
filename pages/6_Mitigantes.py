@@ -10,7 +10,8 @@ from src.apetito import (COMBINACION_LEVELS, PRODUCTIVO_ORDER, VEHICULO_ORDER, a
     percentil_acierta, seed_defaults)
 from src.decision import (A_ESTUDIO, APROBADO, CONDICIONES, GARANTIA_MAX_ANTIGUEDAD, GARANTIA_MIN_COBERTURA,
     RIE_ORDER, SEGMENT_ORDER, credit_mitigants, matrix_decisions)
-from src.parametros import NIVELES, apetito_levels, mitigante_conditions, version_sidebar
+from src.parametros import (ACTIVE_STATE, MESSAGE_STATE, NIVELES, SELECT_STATE, USER_STATE, apetito_levels,
+    mitigante_conditions, save_version, user_slug, version_sidebar)
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Mitigantes", page_icon="◫", layout="wide")
@@ -69,7 +70,7 @@ st.caption(f"Porcentajes sobre {format_n(total)} solicitudes del segmento selecc
            f"valor superior al {gar_cfg['valor'] * 100:g}% del valor del vehículo; la solicitud la tiene si sus garantías "
            f"idóneas suman más del {GARANTIA_MIN_COBERTURA * 100:g}% del valor a financiar. Se asume que ninguna garantía "
            "está prendada (el dato de las solicitudes no es confiable). FGA: se puede pedir en todas las solicitudes; "
-           "solo reemplaza a la garantía cuando la combinación la exige y la solicitud no tiene garantía idónea.")
+           "con Garantía en 1 reemplaza a la garantía, y solo (sin Garantía) se exige como mitigante.")
 
 # ---------------- Filtro ----------------
 st.selectbox("Segmento", segment_options, index=segment_options.index(selected_segment), key="mit_segmento")
@@ -79,7 +80,7 @@ st.markdown('<div class="fa-section">Combinaciones perfil × vehículo con decis
             unsafe_allow_html=True)
 matriz = apetito_levels()["matriz"]
 conditions = mitigante_conditions()
-# Decisión final de cada crédito con combinación completa: la de su celda en la matriz de la hoja Árbol;
+# Decisión final de cada crédito con combinación completa: la de su celda en la matriz de la hoja Apetito;
 # en las celdas con "Condiciones", Aprobado si tiene los mitigantes exigidos y A estudio si no.
 DECIDED = matrix_decisions(VIEW, matriz, conditions)
 
@@ -88,10 +89,10 @@ ZERO = {"avalista": 0, "garantia": 0, "fga": 0, "desistir": 0}
 EDIT_COLS = {"Avalista": "avalista", "Garantía": "garantia", "FGA": "fga", "Desistir": "desistir"}
 MIT_CAPTION = ("{filas} filas. Tipo: productivo o consumo. Avalista, "
     "Garantía y FGA (1/0) definen los mitigantes exigidos a cada fila: con Avalista y Garantía en 1 se exigen "
-    "los dos; FGA en 1 permite reemplazar la garantía (con Garantía en 0 no tiene efecto). Lo exigido en el "
+    "los dos; FGA en 1 junto con Garantía significa garantía o FGA, y FGA solo exige FGA. Lo exigido en el "
     "detalle tiene precedencia sobre lo exigido a la combinación. Decisión - Cumple es el % de créditos de la "
-    "fila que tienen los mitigantes exigidos y Decisión - No cumple el resto; las filas con Avalista y Garantía "
-    "en 0 no se evalúan. Desistir en 1 (vista Detalle) envía la fila a estudio sin evaluar mitigantes. Los cambios se aplican al pulsar «Guardar configuración de mitigantes» y quedan en un archivo con «Guardar como nueva versión» en la barra lateral.")
+    "fila que tienen los mitigantes exigidos y Decisión - No cumple el resto; las filas con Avalista, Garantía y "
+    "FGA en 0 no se evalúan. Desistir en 1 (vista Detalle) envía la fila a estudio sin evaluar mitigantes. Los cambios se aplican al pulsar «Guardar configuración de mitigantes»; «Guardar y crear nueva versión» además los guarda en un archivo con el nombre de la barra lateral. «Guardar como nueva versión» de la barra lateral solo incluye lo ya aplicado.")
 # Detalle: licencia/condición y RIE de cada combinación en Condiciones.
 DETALLE_COLS = {"Vehículo": "Licencia/condición", "RIE": "RIE"}
 order = {"Tipo": PRODUCTIVO_ORDER, "Nivel perfil": NIVELES, "Nivel vehículo": NIVELES,
@@ -105,7 +106,7 @@ group_cols = COMBINACION_LEVELS + (list(DETALLE_COLS) if vista == "Detalle" else
 key_col = "detalle" if vista == "Detalle" else "rama"
 if EN_CONDICIONES.empty:
     st.info('No hay solicitudes en combinaciones con decisión "Condiciones". Asígnalas en la matriz perfil × vehículo '
-            'de la hoja Árbol.')
+            'de la hoja Apetito.')
     table = pd.DataFrame()
 else:
     table = (EN_CONDICIONES.groupby(group_cols + list(dict.fromkeys([key_col, "rama"])), observed=True).size().rename("Créditos")
@@ -124,11 +125,24 @@ else:
         for col, chosen in selected.items():
             if chosen:
                 table = table[table[col].isin(chosen)]
+        activos = [f"{DETALLE_COLS.get(c, c)}: {', '.join(map(str, v))}" for c, v in selected.items() if v]
+        if activos:
+            st.caption("Filtros activos: " + " · ".join(activos) + ". Hay filas ocultas; vacía los filtros y pulsa "
+                       "«Aplicar filtros» para ver todas.")
     for col in group_cols:
         table[f"_{col}"] = table[col].map({v: i for i, v in enumerate(order[col])})
     table = (table.sort_values([f"_{c}" for c in COMBINACION_LEVELS] + ["Créditos"],
                                ascending=[True] * len(COMBINACION_LEVELS) + [False])
              .drop(columns=[f"_{c}" for c in group_cols]).reset_index(drop=True))
+if not table.empty:
+    # Filas sin decisión: Condiciones sin ningún mitigante exigido y sin desistir.
+    eff_all = [conditions.get(k) or conditions.get(r) or ZERO for k, r in zip(table[key_col], table["rama"])]
+    sin_exigencia = pd.Series([not any(int(e.get(m, 0)) for m in ZERO) for e in eff_all], index=table.index)
+    if sin_exigencia.any():
+        st.warning(f"{format_n(int(sin_exigencia.sum()))} filas ({format_n(int(table.loc[sin_exigencia, 'Créditos'].sum()))} "
+                   "créditos) no exigen avalista, garantía ni FGA y no están en Desistir: quedan Sin decisión.")
+    if st.checkbox("Mostrar solo las filas sin decisión", key="mit_solo_sin_decision"):
+        table = table[sin_exigencia].reset_index(drop=True)
 if not table.empty:
     keys, ramas = table[key_col].tolist(), table["rama"].tolist()
     # Lo exigido en el detalle tiene precedencia sobre lo exigido a la combinación.
@@ -145,6 +159,7 @@ if not table.empty:
     shown[NO_CUMPLE] = 100 - shown[CUMPLE]
     fixed_cols = [DETALLE_COLS.get(c, c) for c in group_cols] + ["Créditos", CUMPLE, NO_CUMPLE]
     filtros = "_".join(",".join(map(str, st.session_state.get(f"mit_filtro_{c}", []))) for c in ["Tipo", "Nivel perfil", "Nivel vehículo", "Vehículo", "RIE"])
+    filtros += "_solo" if st.session_state.get("mit_solo_sin_decision") else ""
     # En un formulario: lo editado se aplica al pulsar «Guardar configuración de mitigantes».
     form = st.form("mit_condiciones_form", border=False)
     edited = form.data_editor(shown, width="stretch", hide_index=True, num_rows="fixed",
@@ -156,13 +171,20 @@ if not table.empty:
                        "Avalista": st.column_config.SelectboxColumn("Avalista", options=[1, 0], required=True),
                        "Garantía": st.column_config.SelectboxColumn("Garantía", options=[1, 0], required=True),
                        "FGA": st.column_config.SelectboxColumn("FGA", options=[1, 0], required=True,
-                           help="Con Garantía en 1, la solicitud sin garantía idónea cumple pidiendo FGA."),
+                           help="Con Garantía en 1: garantía o FGA. Sin Garantía: se exige FGA."),
                        "Desistir": st.column_config.SelectboxColumn("Desistir", options=[1, 0], required=True,
                            help="En 1, la fila se envía a estudio sin evaluar avalista, garantía ni FGA."),
                        CUMPLE: st.column_config.NumberColumn(CUMPLE, format="%.1f%%"),
                        NO_CUMPLE: st.column_config.NumberColumn(NO_CUMPLE, format="%.1f%%")})
     form.caption(MIT_CAPTION.format(filas=format_n(len(shown))))
-    form.form_submit_button("Guardar configuración de mitigantes", type="primary")
+    b_apply, b_version = form.columns([1, 1])
+    with b_apply:
+        st.form_submit_button("Guardar configuración de mitigantes", type="primary")
+    with b_version:
+        # Los cambios de un formulario solo llegan al pulsar uno de sus botones: este aplica lo editado en la
+        # tabla y, en el mismo paso, guarda la versión con el nombre y la nota de la barra lateral.
+        save_new_version = st.form_submit_button("Guardar y crear nueva versión",
+            help="Aplica lo editado en la tabla y guarda una versión nueva con tu nombre de la barra lateral.")
     changed = False
     for i, (key, eff) in enumerate(zip(keys, effective)):
         # Las columnas que no se muestran en la vista (Desistir en Combinación) conservan su valor.
@@ -170,6 +192,17 @@ if not table.empty:
         if new != {m: int(eff.get(m, 0)) for m in ZERO}:
             conditions[key] = new
             changed = True
+    if save_new_version:
+        user = st.session_state.get(USER_STATE, "")
+        if not user_slug(user):
+            st.warning("Escribe tu nombre en la barra lateral («Tu nombre») para guardar la versión. Lo editado en la "
+                       "tabla ya quedó aplicado en la sesión.")
+        else:
+            name = save_version(user, st.session_state.get("ver_nota", ""))
+            st.session_state[ACTIVE_STATE] = st.session_state[SELECT_STATE] = name
+            st.session_state.pop("ver_nota", None)
+            st.session_state[MESSAGE_STATE] = f"Guardada como {name} (incluye los mitigantes por combinación y por detalle)."
+            st.rerun()
     # Tras guardar se recalculan una vez las columnas de cumplimiento y las tarjetas.
     if changed:
         st.rerun()
@@ -189,7 +222,7 @@ st.caption(f"Porcentajes sobre {format_n(total_decided)} créditos del segmento 
            "que cumplen los mitigantes exigidos. A estudio: celdas con decisión A estudio más los que no cumplen."
            + (f" {format_n(n_rest)} créditos quedan fuera: celdas sin decisión o con Condiciones sin mitigante exigido." if n_rest else "")
            + (f" De los aprobados, {format_n(n_fga)} ({format_pct(n_fga, int(final[APROBADO].sum()))}) cumplen pidiendo "
-              "FGA (sin garantía idónea)." if (n_fga := int(DECIDED["cumple_por_fga"].sum())) else "")
+              "FGA." if (n_fga := int(DECIDED["cumple_por_fga"].sum())) else "")
            + (f" {format_n(n_out)} créditos del segmento no tienen combinación completa (sin nivel de perfil o de "
               "vehículo, o sin dato de productivo) y no entran." if n_out else ""))
 

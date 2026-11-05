@@ -1,9 +1,9 @@
-"""Clasificación de apetito por crédito, compartida por las hojas Árbol, Mitigantes y Decisión.
+"""Clasificación de apetito por crédito, compartida por las hojas Apetito, Mitigantes y Decisión final.
 
 1. Perfil: Segmento x RIE x decil de acierta (calculado por segmento), con nivel Bajo/Medio/Alto asignado en la
-   hoja Árbol. El nivel por defecto sale de config/apetito_default.json; opcionalmente se calibra en cada segmento
+   hoja Apetito. El nivel por defecto sale de config/apetito_default.json; opcionalmente se calibra en cada segmento
    con la mora > 90 a 15 meses (perfil_sugerido).
-2. Vehículo: una matriz por tipo de crédito (productivo/consumo) con filas rango de valor del vehículo (quintiles
+2. Vehículo: una matriz por tipo de crédito (productivo/consumo) con filas rango de valor a financiar (quintiles
    V1-V5 sobre toda la base) y columnas licencia/condición, con nivel Bajo/Medio/Alto.
 3. Matriz nivel perfil x nivel vehículo, una para productivos y otra para consumo, con la
    decisión Aprobado, Condiciones o A estudio. Las combinaciones en Condiciones pasan a Mitigantes.
@@ -22,7 +22,7 @@ PERFIL_ANTERIOR = {
     "P0–P10": ["P10"], "P10–P25": ["P20"], "P25–P50": ["P30", "P40", "P50"], "P50–P75": ["P60", "P70"],
     "P75–P100": ["P80", "P90", "P100"],
 }
-# Rangos de valor del vehículo: quintiles de ValorVh sobre toda la base (V1 = los más baratos).
+# Rangos de valor a financiar (ValorVh - MontoCtaInicial): quintiles sobre toda la base (V1 = los montos más bajos).
 VALOR_RANGOS = [f"V{v}" for v in range(1, 6)]
 VEHICULO_ORDER = ["Público/Nuevo", "Público/Usado", "Particular/Nuevo", "Particular/Usado"]
 PRODUCTIVO_ORDER = ["Productivo", "Consumo"]
@@ -35,7 +35,7 @@ PRODUCTIVO_SIN_DATO = "Sin dato"
 CALIBRACION_MORA = 90
 CALIBRACION_MESES = 15
 CALIBRACION_PESO = 50
-# Valores por defecto de las matrices de la hoja Árbol (perfil, vehículo y decisión por tipo de crédito).
+# Valores por defecto de las matrices de la hoja Apetito (perfil, vehículo y decisión por tipo de crédito).
 DEFAULTS_PATH = Path(__file__).resolve().parents[1] / "config" / "apetito_default.json"
 # Llave de cada combinación de la matriz: tipo de crédito, nivel perfil y nivel vehículo.
 COMBINACION_LEVELS = ["Tipo", "Nivel perfil", "Nivel vehículo"]
@@ -52,16 +52,22 @@ def percentil_acierta(data):
     decil = np.ceil(acierta.groupby(data["perfil_label"]).rank(pct=True, method="max") * 10)
     return decil.map(lambda d: f"P{int(d) * 10}" if pd.notna(d) else pd.NA).astype("string")
 
+def valor_financiar(data):
+    """Valor a financiar = ValorVh - MontoCtaInicial (solo con valor del vehículo positivo)."""
+    vehiculo = pd.to_numeric(data.get("ValorVh", pd.Series(np.nan, index=data.index)), errors="coerce")
+    cuota = pd.to_numeric(data.get("MontoCtaInicial", pd.Series(np.nan, index=data.index)), errors="coerce")
+    return (vehiculo - cuota).where(vehiculo > 0)
+
 def valor_rango(data):
-    """Rango de valor del vehículo (V1 a V5): quintil de ValorVh > 0 sobre las filas de data. Los empates quedan
-    en el mismo rango; sin valor no hay rango."""
-    valor = pd.to_numeric(data.get("ValorVh", pd.Series(np.nan, index=data.index)), errors="coerce")
+    """Rango de valor a financiar (V1 a V5): quintil del valor a financiar > 0 sobre las filas de data. Los empates
+    quedan en el mismo rango; sin valor no hay rango."""
+    valor = valor_financiar(data)
     q = np.ceil(valor.where(valor > 0).rank(pct=True, method="max") * 5)
     return q.map(lambda v: f"V{int(v)}" if pd.notna(v) else pd.NA).astype("string")
 
 def valor_etiquetas(data, rangos):
-    """Etiqueta de cada rango con su intervalo de valor en millones, por ejemplo 'V2 · 62–85 M'."""
-    valor = pd.to_numeric(data.get("ValorVh", pd.Series(np.nan, index=data.index)), errors="coerce") / 1e6
+    """Etiqueta de cada rango con su intervalo de valor a financiar en millones, por ejemplo 'V2 · 45–68 M'."""
+    valor = valor_financiar(data) / 1e6
     out = {}
     for r in VALOR_RANGOS:
         v = valor[rangos.eq(r).fillna(False)]
@@ -140,7 +146,7 @@ def seed_defaults(levels, segmentos, frame=None):
 def add_apetito(data, levels):
     """Agrega Vehículo, Valor, Percentil, Tipo, Nivel perfil, Nivel vehículo y Combinación.
     data debe traer Segmento, RIE, Licencia y Condición (ramas del árbol), y percentil_acierta o perfil_label
-    para calcular el decil; valor_rango o ValorVh para el rango de valor del vehículo."""
+    para calcular el decil; valor_rango o ValorVh y MontoCtaInicial para el rango de valor a financiar."""
     data = data.copy()
     empty = pd.Series(pd.NA, index=data.index, dtype="string")
     # El percentil se puede calcular antes (sobre toda la base del segmento) y pasar en percentil_acierta.

@@ -15,7 +15,7 @@ st.set_page_config(page_title="RIE · Componentes y reglas", page_icon="◈", la
 apply_finanzauto_theme()
 
 DATA = prepare_data(load_data()).copy()
-# Parámetros compartidos con Árbol, Mitigantes y Decisión: los editores de esta hoja los modifican en sitio.
+# Parámetros compartidos con Apetito, Mitigantes y Decisión final: los editores de esta hoja los modifican en sitio.
 PARAMS = rie_params()
 GREEN = "#087A55"
 DARK = "#064B39"
@@ -37,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("RIE – Componentes y reglas")
-st.caption("Evalúa Respaldo, Ingresos y Experiencia. La puntuación de resultados aplica las ponderaciones y tablas de Motor_decision.pptx. Los rangos y parámetros editados aquí se aplican en Árbol, Mitigantes y Decisión, y se guardan con «Guardar como nueva versión» en la barra lateral.")
+st.caption("Evalúa Respaldo, Ingresos y Experiencia. La puntuación de resultados aplica las ponderaciones y tablas de Motor_decision.pptx. Los rangos y parámetros editados aquí se aplican en Apetito, Mitigantes y Decisión final, y se guardan con «Guardar como nueva versión» en la barra lateral.")
 
 # Utilidades de normalización para columnas que llegan como texto o con separadores.
 def num(series):
@@ -312,7 +312,7 @@ with st.container(border=True):
 st.markdown("---")
 banner("Resultados del RIE", "Puntaje combinado mediante la normalización 3/7, con distribución por licencia.", "▦")
 
-# Puntaje RIE (Motor_decision.pptx), calculado en src/rie.py para compartirlo con la hoja Árbol.
+# Puntaje RIE (Motor_decision.pptx), calculado en src/rie.py para compartirlo con la hoja Apetito.
 all_licenses = DATA["licencia_vehiculo"].astype("string").str.upper()
 results = rie_scores(DATA, PARAMS)
 results["Licencia"] = all_licenses
@@ -376,6 +376,6 @@ if all_licenses.loc[VIEW.index].eq("PUB").any():
         st.info(f"Experiencia en licencia Pública: además de los tres criterios, alguna garantía (RPV1 a RPV3) debe ser "
                 f"de servicio público. {format_n(n_gar)} de {format_n(n_pub)} créditos públicos "
                 f"({n_gar / n_pub * 100:.1f}%) la tienen; el resto no suma el punto de Experiencia.")
-st.caption("Notas: las fechas faltantes o no válidas de FechaAperturaMontoMax se reemplazan temporalmente por la fecha de hoy para calcular Experiencia; por ello, esos registros no cumplirán el requisito de antigüedad mínima de un año. Los rangos y parámetros editados se aplican en Árbol, Mitigantes y Decisión durante la sesión y se conservan al guardarlos como versión en la barra lateral. Las calificaciones de PTI/DTI/EI aplican los umbrales de la PPT por licencia y estado civil. La normalización sigue la tabla de la PPT: puntajes 0–1→0, 2–3→1, 4–5→2 y 6–7→3. La cuota usa el plazo real de cada solicitud (PlazoMeses) y la tasa mensual (TasaMV).")
+st.caption("Notas: las fechas faltantes o no válidas de FechaAperturaMontoMax se reemplazan temporalmente por la fecha de hoy para calcular Experiencia; por ello, esos registros no cumplirán el requisito de antigüedad mínima de un año. Los rangos y parámetros editados se aplican en Apetito, Mitigantes y Decisión final durante la sesión y se conservan al guardarlos como versión en la barra lateral. Las calificaciones de PTI/DTI/EI aplican los umbrales de la PPT por licencia y estado civil. La normalización sigue la tabla de la PPT: puntajes 0–1→0, 2–3→1, 4–5→2 y 6–7→3. La cuota usa el plazo real de cada solicitud (PlazoMeses) y la tasa mensual (TasaMV).")
 
 version_sidebar()

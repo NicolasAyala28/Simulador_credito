@@ -86,10 +86,6 @@ transiciones = transiciones_mora(datos, claves=["cosecha", "segmento"])
 # El roll rate junta todas las cosechas seleccionadas de cada segmento.
 roll_rate = calcular_roll_rate(transiciones, claves=["segmento"])
 
-print(transiciones)
-
-print(roll_rate)
-
 st.caption("**Recuperación:** el crédito baja de rango o se mantiene. **Deterioro:** sube de rango. "
            f"La zona sombreada son los rangos con mora mayor a {umbral} días. Cada panel usa la tabla de roll rate "
            "de su segmento con todas las cosechas seleccionadas; los rangos altos tienen pocas transiciones, así que "

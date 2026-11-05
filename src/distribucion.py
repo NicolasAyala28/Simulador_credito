@@ -1,4 +1,4 @@
-"""Datos, filtro y estilos compartidos por las dos hojas de Distribución."""
+"""Datos, filtro y estilos compartidos por las dos hojas de Población."""
 import streamlit as st
 
 from src.data_loader import load_data, prepare_data

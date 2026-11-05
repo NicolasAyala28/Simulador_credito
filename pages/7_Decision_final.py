@@ -5,11 +5,12 @@ import streamlit as st
 from src.common import load_config
 from src.data_loader import load_data, prepare_data
 from src.apetito import add_apetito, percentil_acierta, seed_defaults
-from src.decision import A_ESTUDIO, APROBADO, FINAL_ORDER, SEGMENT_ORDER, SIN_DECISION, credit_mitigants, matrix_decisions
+from src.decision import (A_ESTUDIO, APROBADO, CONDICIONES, FINAL_ORDER, SEGMENT_ORDER, SIN_DECISION,
+    credit_mitigants, matrix_decisions)
 from src.parametros import apetito_levels, mitigante_conditions, version_sidebar
 from src.theme import apply_finanzauto_theme
 
-st.set_page_config(page_title="Decisión", page_icon="▦", layout="wide")
+st.set_page_config(page_title="Decisión final", page_icon="▦", layout="wide")
 apply_finanzauto_theme()
 
 TEXT = "#0A2F4A"
@@ -24,12 +25,12 @@ st.markdown("""
   <div class="eyebrow">Finanzauto · Motor de decisión</div>
   <h1 style="font-size:27px">Decisión final</h1>
   <p>Decisión de cada crédito luego de mitigantes: Aprobado y A estudio según su celda de la matriz perfil × vehículo
-  de la hoja Árbol y, en las celdas con "Condiciones", Aprobado si cumple los mitigantes exigidos en Mitigantes y A estudio si no.</p>
+  de la hoja Apetito y, en las celdas con "Condiciones", Aprobado si cumple los mitigantes exigidos en Mitigantes y A estudio si no.</p>
 </div>
 """, unsafe_allow_html=True)
 
 # Misma base y reglas que Mitigantes: combinación (tipo, nivel perfil, nivel vehículo) de cada crédito,
-# decisión de su celda en la matriz de la hoja Árbol y mitigantes exigidos en la hoja Mitigantes.
+# decisión de su celda en la matriz de la hoja Apetito y mitigantes exigidos en la hoja Mitigantes.
 PREPARED = prepare_data(load_data()).reset_index(drop=True)
 MITIGATED = credit_mitigants(PREPARED, load_config("avalista"), load_config("garantia"))
 MITIGATED["percentil_acierta"] = percentil_acierta(MITIGATED)
@@ -92,15 +93,41 @@ st.dataframe(table.reset_index(names="Segmento"), width="stretch", hide_index=Tr
     column_config={**{c: st.column_config.NumberColumn(c, format="localized") for c in ["Créditos"] + labels},
                    **{f"% {l}": st.column_config.NumberColumn(f"% {l}", format="%.1f%%") for l in labels}})
 note = (f"Base: {format_n(total)} créditos con combinación completa (tipo productivo/consumo, nivel perfil y nivel "
-        "vehículo). Aprobado y A estudio salen de la matriz perfil × vehículo de la hoja Árbol; en las celdas con "
+        "vehículo). Aprobado y A estudio salen de la matriz perfil × vehículo de la hoja Apetito; en las celdas con "
         "Condiciones, el crédito queda Aprobado si cumple los mitigantes exigidos en la hoja Mitigantes (Avalista / "
         "Garantía / FGA, con los datos de la solicitud) y A estudio si no. Se usan los valores de la versión activa (barra lateral) con los cambios de la sesión.")
 if counts[SIN_DECISION]:
-    note += (f" {format_n(counts[SIN_DECISION])} créditos quedan Sin decisión: su celda no tiene decisión en Árbol "
+    note += (f" {format_n(counts[SIN_DECISION])} créditos quedan Sin decisión: su celda no tiene decisión en Apetito "
              "o tiene Condiciones sin mitigante exigido (0/0).")
 if n_out:
     note += (f" {format_n(n_out)} créditos no entran: sin RIE calculable, sin nivel de perfil o de vehículo, "
              "o sin dato de productivo.")
 st.caption(note)
+
+# ---------------- Solicitudes sin decisión ----------------
+# Quedan sin decisión las celdas de la matriz sin valor y las celdas en Condiciones sin avalista ni garantía exigidos:
+# un 0 en Mitigantes también es un valor asignado, pero no exige nada y la solicitud no se evalúa.
+SIN = FINAL[FINAL["decision_final"].eq(SIN_DECISION)].copy()
+if not SIN.empty:
+    st.markdown('<div class="fa-section">Solicitudes sin decisión</div>', unsafe_allow_html=True)
+    conditions = mitigante_conditions()
+    need = [conditions.get(d) or conditions.get(r) or {} for d, r in zip(SIN["detalle"], SIN["rama"])]
+    SIN["Avalista"] = [int(n.get("avalista", 0)) for n in need]
+    SIN["Garantía"] = [int(n.get("garantia", 0)) for n in need]
+    SIN["FGA"] = [int(n.get("fga", 0)) for n in need]
+    SIN["Motivo"] = [
+        "La celda no tiene decisión en la matriz de la hoja Apetito" if pd.isna(d)
+        else "Condiciones sin mitigante exigido en Mitigantes" if d == CONDICIONES
+        else "Otro" for d in SIN["decision_arbol"]]
+    cols = ["Motivo", "Tipo", "Nivel perfil", "Nivel vehículo", "Vehículo", "RIE", "Avalista", "Garantía", "FGA"]
+    pendientes = (SIN.groupby(cols, dropna=False).size().rename("Créditos").reset_index()
+                  .rename(columns={"Vehículo": "Licencia/condición"})
+                  .sort_values(["Motivo", "Créditos"], ascending=[True, False]))
+    st.dataframe(pendientes, width="stretch", hide_index=True,
+                 column_config={"Créditos": st.column_config.NumberColumn("Créditos", format="localized")})
+    st.caption(f"{format_n(len(SIN))} créditos sin decisión, por combinación y detalle (licencia/condición y RIE). "
+               "En Mitigantes, un 0 en Avalista, Garantía y FGA es un valor asignado pero no exige ningún mitigante, así "
+               "que esas solicitudes no se evalúan. Para que tengan decisión, exige avalista, garantía o FGA en esas filas, márcalas para desistir (van a estudio) o cambia la decisión de "
+               "la celda en la matriz de la hoja Apetito.")
 
 version_sidebar()
