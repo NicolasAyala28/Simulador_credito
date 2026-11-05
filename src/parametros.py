@@ -1,7 +1,7 @@
 """Parámetros editables compartidos entre hojas y sus versiones.
 
-Una versión reúne todo lo editable: parámetros RIE, decisión por rama del Árbol y mitigantes
-exigidos en Mitigantes, porque dependen entre sí (el RIE define las ramas que reciben decisión).
+Una versión reúne todo lo editable: parámetros RIE, decisión por rama del Árbol, niveles de
+apetito del Árbol (perfil, vehículo y matriz por productivo/consumo) y mitigantes exigidos en Mitigantes, porque dependen entre sí (el RIE define las ramas que reciben decisión).
 
 - Al iniciar la sesión se carga la versión 1 (config/versiones/base_v1.json), que no se modifica.
 - Lo editado vive en st.session_state con claves propias (no las de los widgets, que Streamlit
@@ -27,16 +27,24 @@ VERSIONS_DIR = ROOT / "config" / "versiones"
 BASE_VERSION = "base_v1"
 APROBADO, CONDICIONES, A_ESTUDIO = "Aprobado", "Condiciones", "A estudio"
 DECISION_OPTIONS = [APROBADO, CONDICIONES, A_ESTUDIO]
+# Mitigantes exigibles por rama (1/0); el FGA respalda la garantía.
+# desistir: la fila de detalle se envía a estudio sin evaluar mitigantes.
+MITIGANTES = ("avalista", "garantia", "fga", "desistir")
+# Niveles de apetito que el analista asigna en las matrices de perfil y vehículo de la hoja Árbol;
+# la matriz perfil x vehículo lleva una decisión de DECISION_OPTIONS.
+NIVELES = ["Bajo", "Medio", "Alto"]
+APETITO_MATRICES = ("perfil", "vehiculo", "matriz")
 
 RIE_STATE = "rie_parametros"
 ARBOL_DECISION_STATE = "arbol_decisiones"
 CONDICIONES_STATE = "mitigantes_condiciones"
+APETITO_STATE = "arbol_apetito"
 ACTIVE_STATE = "version_activa"
 USER_STATE = "version_usuario"
 MESSAGE_STATE = "version_mensaje"
 SELECT_STATE = "version_seleccion"
 # Editores que se reconstruyen desde los parámetros al cargar o descartar una versión.
-EDITOR_PREFIXES = ("rie_editor_", "rie_input_", "arbol_tabla_editor_", "mit_condiciones_editor_")
+EDITOR_PREFIXES = ("rie_editor_", "rie_input_", "arbol_tabla_editor_", "arbol_apetito_", "mit_condiciones_editor_")
 
 def read_json(path):
     if path.exists():
@@ -88,12 +96,18 @@ def load_version(name):
     raw = read_json(version_path(name))
     arbol = raw.get("arbol") if isinstance(raw.get("arbol"), dict) else {}
     mitigantes = raw.get("mitigantes") if isinstance(raw.get("mitigantes"), dict) else {}
+    apetito = raw.get("apetito") if isinstance(raw.get("apetito"), dict) else {}
     return {
         "meta": raw.get("meta") if isinstance(raw.get("meta"), dict) else {},
         "rie": merge(DEFAULT_PARAMS, raw.get("rie")),
         "arbol": {k: v for k, v in arbol.items() if v in DECISION_OPTIONS},
-        "mitigantes": {k: {m: int(bool(v.get(m, 0))) for m in ("avalista", "garantia")}
+        "mitigantes": {k: {m: int(bool(v.get(m, 0))) for m in MITIGANTES}
                        for k, v in mitigantes.items() if isinstance(v, dict)},
+        # Las versiones anteriores no traen apetito: quedan sin niveles asignados.
+        # Perfil y vehículo llevan nivel (Bajo/Medio/Alto); la matriz lleva decisión.
+        "apetito": {m: {k: v for k, v in (apetito.get(m) or {}).items()
+                        if v in (DECISION_OPTIONS if m == "matriz" else NIVELES)}
+                    for m in APETITO_MATRICES},
     }
 
 def list_versions():
@@ -112,7 +126,8 @@ def snapshot():
     ensure_session()
     return {"rie": copy.deepcopy(st.session_state[RIE_STATE]),
             "arbol": dict(st.session_state[ARBOL_DECISION_STATE]),
-            "mitigantes": copy.deepcopy(st.session_state[CONDICIONES_STATE])}
+            "mitigantes": copy.deepcopy(st.session_state[CONDICIONES_STATE]),
+            "apetito": copy.deepcopy(st.session_state[APETITO_STATE])}
 
 def clear_editors():
     for k in [k for k in st.session_state if str(k).startswith(EDITOR_PREFIXES)]:
@@ -124,6 +139,7 @@ def apply_version(name):
     st.session_state[RIE_STATE] = content["rie"]
     st.session_state[ARBOL_DECISION_STATE] = content["arbol"]
     st.session_state[CONDICIONES_STATE] = content["mitigantes"]
+    st.session_state[APETITO_STATE] = content["apetito"]
     st.session_state[ACTIVE_STATE] = name
     clear_editors()
 
@@ -177,6 +193,11 @@ def arbol_decisions():
     """Decisión por rama de la sesión (versión activa más lo editado en la hoja Árbol)."""
     ensure_session()
     return st.session_state[ARBOL_DECISION_STATE]
+
+def apetito_levels():
+    """Niveles de apetito de la sesión: {"perfil": {...}, "vehiculo": {...}, "matriz": {...}}."""
+    ensure_session()
+    return st.session_state[APETITO_STATE]
 
 def mitigante_conditions():
     """Mitigantes exigidos por rama de la sesión (versión activa más lo editado en la hoja Mitigantes)."""
@@ -248,4 +269,4 @@ def version_sidebar():
             st.session_state[ACTIVE_STATE] = name
             st.session_state.pop("ver_nota", None)
             reload(f"Guardada como {name}.")
-        st.caption("Incluye los parámetros RIE, las decisiones del Árbol y los mitigantes por rama.")
+        st.caption("Incluye los parámetros RIE, las decisiones y niveles de apetito del Árbol y los mitigantes por rama.")
