@@ -25,36 +25,28 @@ c.metric("Variables disponibles", f"{len(df.columns):,}".replace(",", "."))
 st.markdown('<div class="fa-section">Módulos del simulador</div>', unsafe_allow_html=True)
 cols = st.columns(3, gap="medium")
 cards = [
-    ("01", "Portada", "Periodo, población, primeras observaciones y calidad de datos."),
-    ("02", "Distribución de variables", "Segmentos y ocupaciones, y gráficas de distribución por segmento."),
-    ("03", "RIE", "Reglas de Respaldo, Ingresos y Experiencia con distribuciones y faltantes."),
-    ("04", "Árbol", "Segmento, RIE, licencia y condición con concentración de mora."),
-    ("05", "Mitigantes", "Avalistas y garantías que cumplen los criterios configurados."),
-    ("06", "Decisión", "Decisión final luego de mitigantes: total y por segmento."),
-    ("07", "Cosechas", "ICC por cosecha y acumulación del default por créditos y por monto."),
-    ("08", "Prueba", "Digita una solicitud y obtén su decisión con los parámetros activos."),
+    ("01", "Base de datos", "Base de solicitudes, periodos, volumen, calidad de datos y registros omitidos.",
+     [("pages/1_Base_de_datos.py", "Abrir módulo →")]),
+    ("02", "Población", "Segmentos y ocupaciones, y gráficas de distribución de las variables por segmento.",
+     [("pages/2_Poblacion.py", "Segmentos y ocupaciones →"), ("pages/2_Poblacion_graficas.py", "Gráficas →")]),
+    ("03", "Cosechas", "ICC por cosecha, rodamientos y por qué el default de originación se define a 90 días.",
+     [("pages/3_Cosechas_General.py", "General →"), ("pages/3_Cosechas_Segmento.py", "Segmento →")]),
+    ("04", "RIE", "Respaldo, Ingresos y Experiencia: reglas, distribuciones y puntaje 0–7.",
+     [("pages/4_RIE.py", "Abrir módulo →")]),
+    ("05", "Apetito", "Matrices de vehículo y perfil, y decisión perfil × vehículo por tipo de crédito.",
+     [("pages/5_Apetito.py", "Abrir módulo →")]),
+    ("06", "Mitigantes", "Avalista, garantía, FGA y desistir en las combinaciones en Condiciones.",
+     [("pages/6_Mitigantes.py", "Abrir módulo →")]),
+    ("07", "Decisión final", "Resultado luego de mitigantes: total, por segmento y solicitudes sin decisión.",
+     [("pages/7_Decision_final.py", "Abrir módulo →")]),
+    ("08", "Evaluar solicitud", "Digita una solicitud y obtén su decisión con los parámetros activos.",
+     [("pages/8_Evaluar_solicitud.py", "Abrir módulo →")]),
 ]
-for i, (num, title, desc) in enumerate(cards):
+for i, (num, title, desc, links) in enumerate(cards):
     with cols[i % 3]:
         with st.container(border=True):
             st.markdown(f"<div style='color:#15966A;font-weight:800;font-size:12px'>{num}</div><h3 style='margin:.2rem 0;color:#0A2F4A'>{title}</h3><p style='color:#5D7890;min-height:52px'>{desc}</p>", unsafe_allow_html=True)
-            if title == "RIE":
-                st.page_link("pages/3_RIE.py", label="Abrir módulo →")
-            elif title == "Portada":
-                st.page_link("pages/1_Portada.py", label="Abrir módulo →")
-            elif title == "Distribución de variables":
-                st.page_link("pages/2_Distribucion.py", label="Segmentos y ocupaciones →")
-                st.page_link("pages/2_Distribucion_graficas.py", label="Gráficas →")
-            elif title == "Árbol":
-                st.page_link("pages/4_Arbol.py", label="Abrir módulo →")
-            elif title == "Mitigantes":
-                st.page_link("pages/5_Mitigantes.py", label="Abrir módulo →")
-            elif title == "Cosechas":
-                st.page_link("pages/7_Cosechas_General.py", label="General →")
-                st.page_link("pages/7_Cosechas_Segmento.py", label="Segmento →")
-            elif title == "Prueba":
-                st.page_link("pages/8_Prueba.py", label="Abrir módulo →")
-            else:
-                st.page_link("pages/6_Decision.py", label="Abrir módulo →")
+            for page, label in links:
+                st.page_link(page, label=label)
 
 st.info("Las reglas de clasificación y la condición de negocio están pendientes de validación. Los resultados de concentración son exploratorios hasta incorporar los criterios oficiales.")

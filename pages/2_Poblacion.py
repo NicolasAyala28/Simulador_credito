@@ -6,7 +6,7 @@ from src.data_loader import OCUPACION_AVALISTA1, OCUPACIONES_POR_AVALISTA, SEGME
 from src.distribucion import (PAGE_STYLE, SEGMENT_ORDER, SIN_OCUPACION, format_n, format_pct,
                               load_distribution_data, year_filter)
 
-st.set_page_config(page_title="Distribución: segmentos y ocupaciones", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Población: segmentos y ocupaciones", page_icon="📊", layout="wide")
 
 from src.theme import apply_finanzauto_theme
 apply_finanzauto_theme()
@@ -14,10 +14,10 @@ apply_finanzauto_theme()
 base, df = load_distribution_data()
 st.markdown(PAGE_STYLE, unsafe_allow_html=True)
 
-st.title("Distribución: segmentos y ocupaciones")
+st.title("Población: segmentos y ocupaciones")
 st.write(
     "Cantidad de créditos por segmento final y ocupaciones que lo componen. "
-    "Las gráficas de distribución por variable están en la hoja **Distribucion graficas**."
+    "Las gráficas de distribución por variable están en la hoja **Poblacion graficas**."
 )
 
 apply_filters = year_filter(df, key="distribution_year")

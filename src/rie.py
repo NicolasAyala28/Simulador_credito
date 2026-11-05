@@ -1,4 +1,4 @@
-"""Puntaje RIE por crédito, compartido por la hoja RIE y la hoja Árbol.
+"""Puntaje RIE por crédito, compartido por la hoja RIE y la hoja Apetito.
 
 Sigue las ponderaciones de Motor_decision.pptx: Respaldo (LTV, 0-3), Ingresos
 (PTI/DTI/EI 33,3% cada uno, 0-3) y Experiencia (0 o 1). Total máximo = 7.
