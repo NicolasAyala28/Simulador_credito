@@ -5,14 +5,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.data_loader import MAX_FINANCIACION, load_data, prepare_data
+from src.data_loader import exclusion_notes, load_data, prepare_data
 from src.apetito import (PRODUCTIVO_ORDER, PRODUCTIVO_SIN_DATO, PERCENTILES, VALOR_RANGOS, VEHICULO_ORDER, add_apetito,
     percentil_acierta, seed_defaults, valor_etiquetas, valor_rango)
 from src.parametros import DECISION_OPTIONS, NIVELES, apetito_levels, rie_params, version_sidebar
 from src.rie import rie_scores
 from src.theme import apply_finanzauto_theme
 
-st.set_page_config(page_title="Árbol", page_icon="🌳", layout="wide")
+st.set_page_config(page_title="Apetito", page_icon="🎯", layout="wide")
 apply_finanzauto_theme()
 
 DATA = prepare_data(load_data())
@@ -54,7 +54,7 @@ def format_int(n):
 st.markdown("""
 <div class="fa-hero" style="padding:17px 24px;min-height:0;margin-bottom:12px">
   <div class="eyebrow">Finanzauto · Motor de decisión</div>
-  <h1 style="font-size:27px">Árbol: apetito por vehículo y perfil</h1>
+  <h1 style="font-size:27px">Apetito: vehículo, perfil y decisión</h1>
   <p>Clasificación de apetito por vehículo y por perfil, decisión por tipo de crédito y su distribución.</p>
 </div>
 """,unsafe_allow_html=True)
@@ -65,7 +65,7 @@ valid_profile_mask = profiles.notna() & ~profiles.str.casefold().isin(invalid_pr
 DATA = DATA[valid_profile_mask].copy()
 DATA["perfil_label"] = profiles[valid_profile_mask].astype(str)
 profile_options = sorted(DATA["perfil_label"].unique().tolist())
-# Decil de acierta por segmento y rango de valor del vehículo, sobre toda la base, antes de los filtros de la hoja.
+# Decil de acierta por segmento y rango de valor a financiar, sobre toda la base, antes de los filtros de la hoja.
 DATA["percentil_acierta"] = percentil_acierta(DATA)
 DATA["valor_rango"] = valor_rango(DATA)
 VALOR_LABELS = valor_etiquetas(DATA, DATA["valor_rango"])
@@ -112,20 +112,20 @@ no_rie = int(APETITO["RIE"].isna().sum())
 
 # ---------------- Clasificación de apetito ----------------
 st.markdown('<div class="fa-section">Clasificación de apetito</div>', unsafe_allow_html=True)
-if (n_fuera := DATA_FULL_ATTRS.get("excluidas_financiacion", 0)):
-    st.info(f"Se omiten {format_int(n_fuera)} solicitudes con valor a financiar mayor a "
-            f"{MAX_FINANCIACION / 1e6:,.0f} millones (fuera del alcance del estudio).".replace(",", "."))
-st.info(f"Solicitudes con RIE no calculable: {format_int(no_rie)} ({no_rie / total_tree * 100 if total_tree else 0:.1f}%) "
-        f"de {format_int(total_tree)}. No entran en la matriz de perfil ni en la decisión porque les falta información "
-        "para el puntaje RIE (ver hoja RIE).")
+# Notas sobre los registros omitidos y otros avisos: se muestran juntas al final de la hoja.
+NOTAS = exclusion_notes(DATA_FULL_ATTRS)
+if no_rie:
+    NOTAS.append(f"Solicitudes con RIE no calculable: {format_int(no_rie)} ({no_rie / total_tree * 100 if total_tree else 0:.1f}%) "
+                 f"de {format_int(total_tree)}. No entran en la matriz de perfil ni en la decisión porque les falta "
+                 "información para el puntaje RIE (ver hoja RIE).")
 mora_15m = pd.to_numeric(DATA.get("mora_max_15m", pd.Series(np.nan, index=DATA.index)), errors="coerce")
 # Sin la mora de la base, las tablas de mora quedan vacías: se avisa en lugar de mostrar ceros sin explicación.
 if "mora_max_15m" not in DATA:
-    st.warning("La base no trae la columna mora_max_15m: las tablas de mora quedan vacías. Regenera la base con la "
-               "mora a 15 meses (query_comite del notebook generacion_base) unida a los desembolsos.")
+    NOTAS.append("La base no trae la columna mora_max_15m: las tablas de mora quedan vacías. Regenera la base con la "
+                 "mora a 15 meses (query_comite del notebook generacion_base) unida a los desembolsos.")
 elif mora_15m.notna().sum() == 0:
-    st.warning("La columna mora_max_15m viene vacía en todos los créditos de la base: las tablas de mora quedan "
-               "vacías. Revisa en el notebook la unión de los desembolsos con la mora (query_comite).")
+    NOTAS.append("La columna mora_max_15m viene vacía en todos los créditos de la base: las tablas de mora quedan "
+                 "vacías. Revisa en el notebook la unión de los desembolsos con la mora (query_comite).")
 # Fuera del formulario para que el filtro se aplique de inmediato, sin esperar a «Guardar configuración».
 # Por defecto mora > 90: la definición de incumplimiento de originación.
 mora_label = st.radio("Mora máxima a 15 meses", list(MORA_FILTROS), index=2, horizontal=True, key="arbol_apetito_mora",
@@ -257,35 +257,35 @@ with st.form("arbol_apetito_form", border=False):
     changed = []
 
     # 1. Vehículo: una matriz por tipo de crédito, filas rango de valor y columnas licencia/condición.
-    st.markdown("**1. Vehículo: valor del vehículo × licencia/condición, por tipo de crédito**")
+    st.markdown("**1. Vehículo: valor a financiar × licencia/condición, por tipo de crédito**")
     VEH = APETITO[APETITO["Tipo"].isin(PRODUCTIVO_ORDER)].dropna(subset=["Vehículo", "Valor"])
     # Las desembolsadas que no tienen tipo de crédito o licencia/condición válidos no entran en la mora del vehículo.
     des = APETITO["desembolsado"]
     n_des, n_des_veh = int(des.sum()), int(VEH["desembolsado"].sum())
     if n_des_veh < n_des:
-        st.warning(f"De {format_int(n_des)} solicitudes desembolsadas, {format_int(n_des - n_des_veh)} no entran en la "
-                   f"mora del vehículo: {format_int(int((des & ~APETITO['Tipo'].isin(PRODUCTIVO_ORDER)).sum()))} sin tipo de "
-                   f"crédito, {format_int(int((des & APETITO['Vehículo'].isna()).sum()))} sin licencia o condición válida "
-                   f"y {format_int(int((des & APETITO['Valor'].isna()).sum()))} sin valor del vehículo.")
+        NOTAS.append(f"De {format_int(n_des)} solicitudes desembolsadas, {format_int(n_des - n_des_veh)} no entran en la "
+                     f"mora del vehículo: {format_int(int((des & ~APETITO['Tipo'].isin(PRODUCTIVO_ORDER)).sum()))} sin tipo de "
+                     f"crédito, {format_int(int((des & APETITO['Vehículo'].isna()).sum()))} sin licencia o condición válida "
+                     f"y {format_int(int((des & APETITO['Valor'].isna()).sum()))} sin valor a financiar.")
     if not VEH.empty:
         for tipo, tab in zip(PRODUCTIVO_ORDER, st.tabs(PRODUCTIVO_ORDER)):
             with tab:
                 VEH_T = VEH[VEH["Tipo"].eq(tipo)]
-                mora_separation(VEH_T, "Valor", "Vehículo", VALOR_RANGOS, VEHICULO_ORDER, "Valor del vehículo", True,
+                mora_separation(VEH_T, "Valor", "Vehículo", VALOR_RANGOS, VEHICULO_ORDER, "Valor a financiar", True,
                                 "la fila", VALOR_LABELS)
                 edit_col, dist_col = st.columns(2, gap="medium")
                 with edit_col:
                     changed.append(apetito_matrix(VALOR_RANGOS, VEHICULO_ORDER, levels["vehiculo"],
                                    lambda r, c, t=tipo: f"{t} | {r} | {c}",
-                                   f"arbol_apetito_vehiculo_{slug(tipo)}_{filters_key}", "Valor del vehículo",
+                                   f"arbol_apetito_vehiculo_{slug(tipo)}_{filters_key}", "Valor a financiar",
                                    row_labels=VALOR_LABELS))
                 with dist_col:
                     level_distribution(VEH_T, "Nivel vehículo", "Nivel vehículo")
-        st.caption("Valor del vehículo: quintiles de ValorVh sobre toda la base (V1 los más baratos, V5 los más caros), "
-                   f"en millones de pesos, sin las solicitudes con valor a financiar mayor a {MAX_FINANCIACION / 1e6:,.0f} M "
-                   "(fuera del alcance del estudio). Los mismos rangos para productivo y consumo.")
+        st.caption("Valor a financiar (valor del vehículo − cuota inicial): quintiles sobre toda la base (V1 los montos "
+                   "más bajos, V5 los más altos), en millones de pesos, sin las solicitudes fuera del alcance del estudio "
+                   "(ver las notas al final de la hoja). Los mismos rangos para productivo y consumo.")
     else:
-        st.warning("No hay solicitudes con tipo de crédito, licencia, condición y valor del vehículo para los filtros seleccionados.")
+        st.warning("No hay solicitudes con tipo de crédito, licencia, condición y valor a financiar para los filtros seleccionados.")
 
     # 2. Perfil: por segmento, filas RIE y columnas decil.
     st.markdown("**2. Perfil: RIE × decil, por segmento**")
@@ -366,5 +366,11 @@ else:
                    "Por tipo: todas las solicitudes con tipo, nivel de perfil y nivel de vehículo, y solo las desembolsadas ("
                    + "; ".join(f"{k}: {format_int(v)}" for k, v in totals.items())
                    + "). Los de Condiciones se resuelven en la hoja Mitigantes. Se actualiza al pulsar «Guardar configuración».")
+
+# ---------------- Notas sobre registros omitidos ----------------
+if NOTAS:
+    st.markdown('<div class="fa-section">Notas sobre registros omitidos</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown("\n".join(f"- {n}" for n in NOTAS))
 
 version_sidebar()

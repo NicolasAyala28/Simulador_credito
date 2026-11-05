@@ -1,20 +1,17 @@
 import streamlit as st
 import pandas as pd
-from src.data_loader import load_data, prepare_data, study_periods
+from src.data_loader import exclusion_notes, load_data, prepare_data, study_periods
 
-st.set_page_config(page_title="Portada", page_icon="🚘", layout="wide")
+st.set_page_config(page_title="Base de datos", page_icon="🚘", layout="wide")
 from src.theme import apply_finanzauto_theme
 apply_finanzauto_theme()
 
 df = prepare_data(load_data())
-st.title("1. Portada")
+st.title("1. Base de datos")
 st.write("Resumen de la base de estudio, periodo, volumen de registros y auditoría de calidad de datos.")
 
 # Periodo y volumen
 periodo_sol, periodo_des = study_periods(df)
-if df.attrs.get("excluidas_financiacion"):
-    st.info(f"Se omiten {df.attrs['excluidas_financiacion']:,} solicitudes con valor a financiar mayor a 180 millones "
-            "(fuera del alcance del estudio).".replace(",", "."))
 c1, c4, c2, c3 = st.columns(4)
 c1.metric("Periodo de solicitudes", periodo_sol)
 c4.metric("Periodo de desembolsos", periodo_des)
@@ -97,3 +94,8 @@ for index, variable in enumerate(list(df.columns)):
     with variable_columns[index % 3]:
         st.markdown(f"- `{variable}`")
 st.caption("La definición funcional de cada variable debe validarse con el diccionario de datos del área responsable antes de formalizar el estudio.")
+
+# Notas sobre los registros omitidos por el alcance del estudio.
+if (notas := exclusion_notes(df.attrs)):
+    st.markdown("### Notas sobre registros omitidos")
+    st.markdown("\n".join(f"- {n}" for n in notas))
