@@ -1,5 +1,5 @@
 {
-  "descripcion": "Códigos de la solicitud (frank_requests) traducidos con el diccionario config/Variables Frank Oriana_v5.3.xlsx, hoja Variables de entrada.",
+  "descripcion": "Códigos de la solicitud (frank_requests) traducidos con el diccionario config/Variables Frank Oriana_v5.3.xlsx, hoja Variables de entrada (ClaseVehiculo, EstadoCivil, Licencia, Condicion y CalificacionMontoMax).",
   "ClaseVehiculo": {
     "1": "AUTOMOVIL",
     "2": "BUS / BUSETA / MICROBUS",
@@ -43,5 +43,17 @@
   "Condicion": {
     "1": "N",
     "2": "U"
+  },
+  "CalificacionMontoMax": {
+    "1": "AA",
+    "2": "A",
+    "3": "BB",
+    "4": "B",
+    "5": "CC",
+    "6": "C",
+    "7": "D",
+    "8": "E",
+    "9": "K",
+    "10": "-"
   }
 }

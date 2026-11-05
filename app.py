@@ -32,6 +32,7 @@ cards = [
     ("05", "Mitigantes", "Avalistas y garantías que cumplen los criterios configurados."),
     ("06", "Decisión", "Decisión final luego de mitigantes: total y por segmento."),
     ("07", "Cosechas", "ICC por cosecha y acumulación del default por créditos y por monto."),
+    ("08", "Prueba", "Digita una solicitud y obtén su decisión con los parámetros activos."),
 ]
 for i, (num, title, desc) in enumerate(cards):
     with cols[i % 3]:
@@ -51,6 +52,8 @@ for i, (num, title, desc) in enumerate(cards):
             elif title == "Cosechas":
                 st.page_link("pages/7_Cosechas_General.py", label="General →")
                 st.page_link("pages/7_Cosechas_Segmento.py", label="Segmento →")
+            elif title == "Prueba":
+                st.page_link("pages/8_Prueba.py", label="Abrir módulo →")
             else:
                 st.page_link("pages/6_Decision.py", label="Abrir módulo →")
 

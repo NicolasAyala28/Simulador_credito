@@ -52,9 +52,10 @@ def garantia_publica(data):
         out |= servicio.str.startswith("PUB").fillna(False)
     return out
 
-def rie_scores(data, params=None):
+def rie_scores(data, params=None, detail=False):
     """Devuelve un DataFrame con Puntaje (0-7), Normalización (0-3) y Categoría (AA/A/AE).
-    Los créditos sin información suficiente quedan con valores nulos."""
+    Los créditos sin información suficiente quedan con valores nulos. Con detail=True agrega los
+    componentes: ratios, calificación de cada subítem y criterios de experiencia."""
     params = params or DEFAULT_PARAMS
     term_months = params["plazo_meses"]
     def field(name):
@@ -131,8 +132,10 @@ def rie_scores(data, params=None):
     exp_eval = exp_ratio_all.notna() & date_request_all.notna() & date_open_all.notna() & date_open_all.dt.year.gt(1901) & rating_all.notna() & principal.gt(0)
     exp_pass = exp_amount_ok & exp_age_ok & exp_rating_ok
     public_guarantee = garantia_publica(data)
+    exp_public_ok = pd.Series(True, index=data.index)
     if public_guarantee is not None:
-        exp_pass &= all_licenses.ne("PUB").fillna(True) | public_guarantee
+        exp_public_ok = all_licenses.ne("PUB").fillna(True) | public_guarantee
+        exp_pass &= exp_public_ok
     experience_component = pd.Series(np.where(exp_eval, exp_pass.astype(float), np.nan), index=data.index, dtype=float)
 
     score_total = ltv_score_all + income_component + experience_component
@@ -140,4 +143,13 @@ def rie_scores(data, params=None):
     score_total = score_total.astype("Int64")
     normalized = score_total.map(NORMALIZATION_MAP).astype("Int64")
     category = normalized.map(CATEGORY_MAP)
-    return pd.DataFrame({"Puntaje": score_total, "Normalización": normalized, "Categoría": category})
+    result = pd.DataFrame({"Puntaje": score_total, "Normalización": normalized, "Categoría": category})
+    if detail:
+        result = result.assign(
+            LTV=ltv_all * 100, score_ltv=ltv_score_all, PTI=pti, score_pti=pti_score, DTI=dti, score_dti=dti_score,
+            EI=ei, score_ei=ei_score, score_ingresos=income_component, casado=married,
+            exp_ratio=exp_ratio_all, exp_monto_ok=exp_amount_ok,
+            exp_antiguedad_dias=(date_request_all - date_open_all).dt.days, exp_antiguedad_ok=exp_age_ok,
+            exp_calificacion_ok=exp_rating_ok, exp_publica_ok=exp_public_ok, score_experiencia=experience_component,
+            puntaje_sin_redondeo=ltv_score_all + income_component + experience_component)
+    return result
