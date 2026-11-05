@@ -1,4 +1,4 @@
-"""Prueba del simulador con una solicitud digitada: aplica las mismas reglas que las hojas RIE, Árbol y
+"""Evaluación de una solicitud digitada: aplica las mismas reglas que las hojas RIE, Apetito y
 Mitigantes (versión de parámetros activa) y muestra la decisión final."""
 import json
 from datetime import date
@@ -7,15 +7,16 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from src.apetito import PRODUCTIVO_ORDER, VEHICULO_ORDER, combinacion_key, seed_defaults
+from src.apetito import PRODUCTIVO_ORDER, VEHICULO_ORDER, combinacion_key, seed_defaults, valor_financiar
 from src.common import financed_amount, monthly_payment
-from src.data_loader import (CODIGOS_SOLICITUD_PATH, MAX_FINANCIACION, OCUPACION_AVAL_PATH, load_data, prepare_data)
+from src.data_loader import (CODIGOS_SOLICITUD_PATH, MAX_FINANCIACION, MIN_FINANCIACION, OCUPACION_AVAL_PATH, load_data,
+    prepare_data)
 from src.decision import A_ESTUDIO, APROBADO, CONDICIONES, RIE_GROUPS, SEGMENT_ORDER, meets
 from src.parametros import apetito_levels, mitigante_conditions, rie_params, version_sidebar
 from src.rie import rie_scores
 from src.theme import apply_finanzauto_theme
 
-st.set_page_config(page_title="Prueba", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="Evaluar solicitud", page_icon="🧪", layout="wide")
 apply_finanzauto_theme()
 
 SIN_DECISION = "Sin decisión"
@@ -37,14 +38,14 @@ ESTADOS_CIVILES = list(_codigos["EstadoCivil"].values())  # Casado(a), Soltero(a
 st.markdown("""
 <div class="fa-hero" style="padding:17px 24px;min-height:0;margin-bottom:12px">
   <div class="eyebrow">Finanzauto · Motor de decisión</div>
-  <h1 style="font-size:27px">Prueba de una solicitud</h1>
+  <h1 style="font-size:27px">Evaluar una solicitud</h1>
   <p>Digita los datos de una solicitud y obtén su decisión con los parámetros de la versión activa: RIE, perfil,
   vehículo, matriz de decisión y mitigantes.</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Base de referencia: con ella se ubica el puntaje en su decil (dentro del segmento) y el valor del vehículo en
-# su quintil, igual que en la hoja Árbol.
+# Base de referencia: con ella se ubica el puntaje en su decil (dentro del segmento) y el valor a financiar en
+# su quintil, igual que en la hoja Apetito.
 BASE = prepare_data(load_data())
 levels = apetito_levels()
 seed_defaults(levels, SEGMENT_ORDER)
@@ -120,8 +121,9 @@ if not valor_vh or not financiar > 0:
     st.error("El valor del vehículo debe ser mayor que la cuota inicial.")
     version_sidebar()
     st.stop()
-if financiar > MAX_FINANCIACION:
-    st.warning(f"El valor a financiar ({format_n(financiar)}) supera {format_n(MAX_FINANCIACION)}: la solicitud está "
+if financiar > MAX_FINANCIACION or financiar < MIN_FINANCIACION:
+    st.warning(f"El valor a financiar ({format_n(financiar)}) está fuera del rango del estudio "
+               f"({format_n(MIN_FINANCIACION)} a {format_n(MAX_FINANCIACION)}): la solicitud está "
                "fuera del alcance del estudio y el simulador no la evalúa.")
     version_sidebar()
     st.stop()
@@ -133,7 +135,7 @@ rie_grupo = RIE_GROUPS.get(int(rie["Normalización"])) if pd.notna(rie["Normaliz
 base_seg = BASE.loc[BASE["segmentacion"].eq(segmento), "acierta"]
 decil = rango(puntaje, base_seg, 10)
 decil = f"P{decil * 10}" if decil else None
-valor_q = rango(valor_vh, BASE["ValorVh"].where(pd.to_numeric(BASE["ValorVh"], errors="coerce") > 0), 5)
+valor_q = rango(financiar, valor_financiar(BASE).where(lambda v: v > 0), 5)
 valor_q = f"V{valor_q}" if valor_q else None
 vehiculo = f"{licencia}/{condicion}"
 nivel_perfil = levels["perfil"].get(f"{segmento} | {rie_grupo} | {decil}")
@@ -174,7 +176,7 @@ with c[0], st.container(border=True):
 with c[1], st.container(border=True):
     st.markdown("**Vehículo**")
     st.write(f"Destino: **{destino}**")
-    st.write(f"Valor: **{valor_q or '–'}** · Licencia/condición: **{vehiculo}**")
+    st.write(f"Valor a financiar: **{valor_q or '–'}** · Licencia/condición: **{vehiculo}**")
     st.write(f"Nivel vehículo: **{nivel_vehiculo or 'Sin nivel'}**")
 with c[2], st.container(border=True):
     st.markdown("**Matriz de decisión**")
