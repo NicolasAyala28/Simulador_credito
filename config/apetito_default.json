@@ -1,5 +1,5 @@
 {
-  "descripcion": "Valores por defecto de las matrices de la hoja Árbol. Se cargan cuando la matriz está vacía (al abrir la app o al cargar una versión sin apetito).",
+  "descripcion": "Valores por defecto de las matrices de la hoja Apetito. Se cargan cuando la matriz está vacía o en un formato anterior (al abrir la app o al cargar una versión).",
   "perfil": {
     "descripcion": "Filas: RIE. Columnas: deciles de acierta P10 (10 % más bajo) a P100 dentro de cada segmento. Iguales para todos los segmentos. Con calibrar = true, cada segmento se recalibra con la mora > 90 a 15 meses (src/apetito.py, perfil_sugerido) y esta tabla queda solo como respaldo.",
     "calibrar": false,
@@ -55,28 +55,279 @@
     }
   },
   "vehiculo": {
-    "descripcion": "Una matriz por tipo de crédito: filas rango de valor del vehículo (V1 a V5, quintiles de ValorVh sobre toda la base) y columnas licencia/condición. 'filas' es el nivel por tipo y licencia/condición, igual en todos los rangos de valor; 'por_valor' permite fijar una fila distinta por rango, por ejemplo {\"Consumo\": {\"V5\": [...]}}.",
+    "descripcion": "Una matriz por segmento y tipo de crédito: filas rango de valor a financiar (V1 a V5, quintiles dentro de cada segmento sobre la base del escenario) y columnas licencia/condición. Particular productivo se considera un caso atípico.",
     "columnas": [
       "Público/Nuevo",
       "Público/Usado",
       "Particular/Nuevo",
       "Particular/Usado"
     ],
-    "filas": {
-      "Productivo": [
-        "Medio",
-        "Alto",
-        "Medio",
-        "Medio"
-      ],
-      "Consumo": [
-        "Medio",
-        "Alto",
-        "Bajo",
-        "Alto"
-      ]
-    },
-    "por_valor": {}
+    "segmentos": {
+      "Empleado": {
+        "Productivo": {
+          "V1": [
+            "Bajo",
+            "Bajo",
+            "Bajo",
+            "Bajo"
+          ],
+          "V2": [
+            "Medio",
+            "Medio",
+            "Bajo",
+            "Medio"
+          ],
+          "V3": [
+            "Medio",
+            "Alto",
+            "Bajo",
+            "Medio"
+          ],
+          "V4": [
+            "Medio",
+            "Alto",
+            "Medio",
+            "Medio"
+          ],
+          "V5": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ]
+        },
+        "Consumo": {
+          "V1": [
+            "Alto",
+            "Alto",
+            "Bajo",
+            "Bajo"
+          ],
+          "V2": [
+            "Alto",
+            "Alto",
+            "Bajo",
+            "Medio"
+          ],
+          "V3": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Alto"
+          ],
+          "V4": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Alto"
+          ],
+          "V5": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ]
+        }
+      },
+      "Independiente Formal": {
+        "Productivo": {
+          "V1": [
+            "Bajo",
+            "Bajo",
+            "Bajo",
+            "Bajo"
+          ],
+          "V2": [
+            "Medio",
+            "Medio",
+            "Bajo",
+            "Medio"
+          ],
+          "V3": [
+            "Medio",
+            "Alto",
+            "Medio",
+            "Medio"
+          ],
+          "V4": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Alto"
+          ],
+          "V5": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ]
+        },
+        "Consumo": {
+          "V1": [
+            "Alto",
+            "Alto",
+            "Bajo",
+            "Bajo"
+          ],
+          "V2": [
+            "Alto",
+            "Alto",
+            "Bajo",
+            "Medio"
+          ],
+          "V3": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Alto"
+          ],
+          "V4": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ],
+          "V5": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ]
+        }
+      },
+      "Independiente Informal": {
+        "Productivo": {
+          "V1": [
+            "Bajo",
+            "Bajo",
+            "Bajo",
+            "Bajo"
+          ],
+          "V2": [
+            "Medio",
+            "Medio",
+            "Bajo",
+            "Medio"
+          ],
+          "V3": [
+            "Medio",
+            "Alto",
+            "Medio",
+            "Medio"
+          ],
+          "V4": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Alto"
+          ],
+          "V5": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ]
+        },
+        "Consumo": {
+          "V1": [
+            "Alto",
+            "Alto",
+            "Bajo",
+            "Bajo"
+          ],
+          "V2": [
+            "Alto",
+            "Alto",
+            "Bajo",
+            "Medio"
+          ],
+          "V3": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Alto"
+          ],
+          "V4": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ],
+          "V5": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ]
+        }
+      },
+      "Transportador": {
+        "Productivo": {
+          "V1": [
+            "Bajo",
+            "Bajo",
+            "Bajo",
+            "Bajo"
+          ],
+          "V2": [
+            "Medio",
+            "Medio",
+            "Bajo",
+            "Medio"
+          ],
+          "V3": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Medio"
+          ],
+          "V4": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Alto"
+          ],
+          "V5": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ]
+        },
+        "Consumo": {
+          "V1": [
+            "Alto",
+            "Alto",
+            "Bajo",
+            "Bajo"
+          ],
+          "V2": [
+            "Alto",
+            "Alto",
+            "Bajo",
+            "Medio"
+          ],
+          "V3": [
+            "Alto",
+            "Alto",
+            "Medio",
+            "Alto"
+          ],
+          "V4": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ],
+          "V5": [
+            "Alto",
+            "Alto",
+            "Alto",
+            "Alto"
+          ]
+        }
+      }
+    }
   },
   "matriz": {
     "descripcion": "Decisión por tipo de crédito. Filas: nivel perfil. Columnas: nivel vehículo. Hoy es la misma para productivo y consumo.",

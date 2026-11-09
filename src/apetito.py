@@ -22,7 +22,7 @@ PERFIL_ANTERIOR = {
     "P0–P10": ["P10"], "P10–P25": ["P20"], "P25–P50": ["P30", "P40", "P50"], "P50–P75": ["P60", "P70"],
     "P75–P100": ["P80", "P90", "P100"],
 }
-# Rangos de valor a financiar (ValorVh - MontoCtaInicial): quintiles sobre toda la base (V1 = los montos más bajos).
+# Rangos de valor a financiar (ValorVh - MontoCtaInicial): quintiles dentro de cada segmento (V1 = los montos más bajos).
 VALOR_RANGOS = [f"V{v}" for v in range(1, 6)]
 VEHICULO_ORDER = ["Público/Nuevo", "Público/Usado", "Particular/Nuevo", "Particular/Usado"]
 PRODUCTIVO_ORDER = ["Productivo", "Consumo"]
@@ -42,15 +42,27 @@ COMBINACION_LEVELS = ["Tipo", "Nivel perfil", "Nivel vehículo"]
 # Detalle dentro de cada combinación (hoja Mitigantes): licencia/condición y RIE.
 DETALLE_LEVELS = ["Vehículo", "RIE"]
 
+def vehiculo_key(segmento, tipo, rango, vehiculo):
+    """Llave del nivel de vehículo: segmento, tipo de crédito, rango de valor a financiar y licencia/condición."""
+    return f"{segmento} | {tipo} | {rango} | {vehiculo}"
+
 def combinacion_key(values):
     return " | ".join(str(v) for v in values)
+
+def unir(frame, cols):
+    """Llave «a | b | c» de las columnas cols, armada por columnas (no registro por registro)."""
+    return frame[cols[0]].astype(str).str.cat([frame[c].astype(str) for c in cols[1:]], sep=" | ")
+
+def _etiqueta(prefijo, numeros):
+    """«P10», «V3»…: prefijo + número entero; sin número queda vacío."""
+    return (prefijo + numeros.astype("Int64").astype("string")).astype("string")
 
 def percentil_acierta(data):
     """Decil (P10 a P100) de acierta dentro de cada segmento (perfil_label); P10 es el 10 % más bajo. Los empates
     quedan en el mismo decil; sin acierta no hay decil. Solo reparte el perfil, no se muestra como variable."""
     acierta = pd.to_numeric(data.get("acierta", pd.Series(np.nan, index=data.index)), errors="coerce")
     decil = np.ceil(acierta.groupby(data["perfil_label"]).rank(pct=True, method="max") * 10)
-    return decil.map(lambda d: f"P{int(d) * 10}" if pd.notna(d) else pd.NA).astype("string")
+    return _etiqueta("P", decil * 10)
 
 def valor_financiar(data):
     """Valor a financiar = ValorVh - MontoCtaInicial (solo con valor del vehículo positivo)."""
@@ -59,11 +71,11 @@ def valor_financiar(data):
     return (vehiculo - cuota).where(vehiculo > 0)
 
 def valor_rango(data):
-    """Rango de valor a financiar (V1 a V5): quintil del valor a financiar > 0 sobre las filas de data. Los empates
-    quedan en el mismo rango; sin valor no hay rango."""
-    valor = valor_financiar(data)
-    q = np.ceil(valor.where(valor > 0).rank(pct=True, method="max") * 5)
-    return q.map(lambda v: f"V{int(v)}" if pd.notna(v) else pd.NA).astype("string")
+    """Rango de valor a financiar (V1 a V5): quintil del valor a financiar > 0 dentro de cada segmento
+    (perfil_label) sobre las filas de data. Los empates quedan en el mismo rango; sin valor no hay rango."""
+    valor = valor_financiar(data).where(lambda v: v > 0)
+    q = np.ceil(valor.groupby(data["perfil_label"]).rank(pct=True, method="max") * 5)
+    return _etiqueta("V", q)
 
 def valor_etiquetas(data, rangos):
     """Etiqueta de cada rango con su intervalo de valor a financiar en millones, por ejemplo 'V2 · 45–68 M'."""
@@ -72,6 +84,16 @@ def valor_etiquetas(data, rangos):
     for r in VALOR_RANGOS:
         v = valor[rangos.eq(r).fillna(False)]
         out[r] = f"{r} · {v.min():,.0f}–{v.max():,.0f} M".replace(",", ".") if len(v) else r
+    return out
+
+def percentil_etiquetas(data, percentiles):
+    """Etiqueta de cada decil con su intervalo de acierta en data, por ejemplo 'P20 · 610–655'."""
+    acierta = pd.to_numeric(data.get("acierta", pd.Series(np.nan, index=data.index)), errors="coerce")
+    out = {}
+    for p in PERCENTILES:
+        v = acierta[percentiles.eq(p).fillna(False)]
+        rango = f"{v.min():,.0f}" if v.min() == v.max() else f"{v.min():,.0f}–{v.max():,.0f}"
+        out[p] = f"{p} · {rango}".replace(",", ".") if len(v) else p
     return out
 
 def perfil_sugerido(frame, segmentos):
@@ -104,8 +126,8 @@ def seed_defaults(levels, segmentos, frame=None):
     """Llena las matrices de perfil, vehículo y decisión que estén vacías. Perfil: la tabla de
     config/apetito_default.json, igual para todos los segmentos; si el JSON tiene calibrar = true, cada segmento
     se recalibra con la mora de frame (perfil_sugerido). Vehículo y decisión:
-    config/apetito_default.json. Un perfil guardado por quintiles o rangos de percentil se pasa a deciles; un
-    vehículo guardado sin rango de valor se repite en todos los rangos; otros formatos anteriores se reemplazan."""
+    config/apetito_default.json, por segmento. Un perfil guardado por quintiles o rangos de percentil se pasa a
+    deciles; un vehículo guardado sin segmento y otros formatos anteriores se reemplazan por los valores por defecto."""
     with open(DEFAULTS_PATH, encoding="utf-8") as f:
         defaults = json.load(f)
     # Perfil guardado con columnas anteriores: cada columna pasa su nivel a los deciles que cubre.
@@ -123,25 +145,28 @@ def seed_defaults(levels, segmentos, frame=None):
         # La calibración por segmento solo se aplica si el JSON la activa (calibrar = true).
         if frame is not None and perfil.get("calibrar", False):
             levels["perfil"].update(perfil_sugerido(frame, segmentos))
-    # Vehículo guardado como tipo | licencia/condición (sin valor): se repite en todos los rangos de valor.
-    for k in [k for k in levels["vehiculo"] if k.count(" | ") == 1 and k.split(" | ")[0] in PRODUCTIVO_ORDER]:
-        tipo, veh = k.split(" | ")
-        nivel = levels["vehiculo"].pop(k)
-        for r in VALOR_RANGOS:
-            levels["vehiculo"].setdefault(f"{tipo} | {r} | {veh}", nivel)
-    if levels["vehiculo"] and not any(k.count(" | ") == 2 and k.split(" | ")[1] in VALOR_RANGOS for k in levels["vehiculo"]):
+    # Vehículo por segmento: Segmento | Tipo | rango de valor | licencia/condición. Los formatos anteriores (sin
+    # segmento, con rangos de valor sobre toda la base) no son comparables y se reemplazan por los valores por defecto.
+    if any(k.count(" | ") != 3 for k in levels["vehiculo"]):
         levels["vehiculo"].clear()
     if not levels["vehiculo"]:
         vehiculo = defaults["vehiculo"]
-        # Cada tipo de crédito tiene una fila por licencia/condición; por_valor permite niveles distintos por rango.
-        for tipo, fila in vehiculo["filas"].items():
-            for r in VALOR_RANGOS:
-                fila_r = vehiculo.get("por_valor", {}).get(tipo, {}).get(r, fila)
-                levels["vehiculo"].update({f"{tipo} | {r} | {c}": v for c, v in zip(vehiculo["columnas"], fila_r)})
+        for seg, tipos in vehiculo["segmentos"].items():
+            for tipo, rangos in tipos.items():
+                for r, fila in rangos.items():
+                    levels["vehiculo"].update({vehiculo_key(seg, tipo, r, c): v for c, v in zip(vehiculo["columnas"], fila)})
     if not levels["matriz"]:
         matriz = defaults["matriz"]
         levels["matriz"].update({combinacion_key([tipo, nivel_p, nivel_v]): v for tipo in PRODUCTIVO_ORDER
                                  for nivel_p, fila in matriz[tipo].items() for nivel_v, v in zip(matriz["columnas"], fila)})
+
+def tipo_credito(data):
+    """Tipo de crédito desde la columna productivo: Productivo, Consumo o Sin dato."""
+    productivo = data.get("productivo", pd.Series(pd.NA, index=data.index, dtype="string")).astype("string").str.strip().str.upper()
+    tipo = pd.Series(PRODUCTIVO_SIN_DATO, index=data.index, dtype="object")
+    tipo[productivo.isin(PRODUCTIVO_SI).fillna(False)] = "Productivo"
+    tipo[productivo.isin(PRODUCTIVO_NO).fillna(False)] = "Consumo"
+    return tipo
 
 def add_apetito(data, levels):
     """Agrega Vehículo, Valor, Percentil, Tipo, Nivel perfil, Nivel vehículo y Combinación.
@@ -155,17 +180,14 @@ def add_apetito(data, levels):
                         ).where(lambda v: v.isin(VEHICULO_ORDER))
     # El rango de valor se puede calcular antes (sobre toda la base) y pasar en valor_rango.
     data["Valor"] = data["valor_rango"].astype("string") if "valor_rango" in data else valor_rango(data)
-    productivo = data.get("productivo", empty).astype("string").str.strip().str.upper()
-    data["Tipo"] = PRODUCTIVO_SIN_DATO
-    data.loc[productivo.isin(PRODUCTIVO_SI).fillna(False), "Tipo"] = "Productivo"
-    data.loc[productivo.isin(PRODUCTIVO_NO).fillna(False), "Tipo"] = "Consumo"
+    data["Tipo"] = tipo_credito(data)
     data["Nivel perfil"] = (data["Segmento"].astype("string") + " | " + data["RIE"].astype("string") + " | "
                            + data["Percentil"]).map(levels["perfil"])
-    # Nivel de vehículo por tipo de crédito, rango de valor y licencia/condición.
-    data["Nivel vehículo"] = (data["Tipo"].astype("string") + " | " + data["Valor"] + " | "
-                              + data["Vehículo"]).map(levels["vehiculo"])
+    # Nivel de vehículo por segmento, tipo de crédito, rango de valor y licencia/condición.
+    data["Nivel vehículo"] = (data["Segmento"].astype("string") + " | " + data["Tipo"].astype("string") + " | "
+                              + data["Valor"] + " | " + data["Vehículo"]).map(levels["vehiculo"])
     complete = data[COMBINACION_LEVELS].notna().all(axis=1) & data["Tipo"].isin(PRODUCTIVO_ORDER)
-    data["Combinación"] = data[COMBINACION_LEVELS].astype(str).agg(" | ".join, axis=1).where(complete)
+    data["Combinación"] = unir(data, COMBINACION_LEVELS).where(complete)
     detalle_ok = complete & data[DETALLE_LEVELS].notna().all(axis=1)
-    data["Detalle"] = data[COMBINACION_LEVELS + DETALLE_LEVELS].astype(str).agg(" | ".join, axis=1).where(detalle_ok)
+    data["Detalle"] = unir(data, COMBINACION_LEVELS + DETALLE_LEVELS).where(detalle_ok)
     return data
