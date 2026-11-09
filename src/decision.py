@@ -9,9 +9,12 @@ la decisión sale de la matriz de productivos o de consumo de la hoja Apetito.
 """
 import numpy as np
 import pandas as pd
+import streamlit as st
 
+from src.apetito import percentil_acierta, unir
 from src.common import financed_amount, monthly_payment
 from src.parametros import A_ESTUDIO, APROBADO, CONDICIONES, rie_params
+from src.filtros import base_filtrable
 from src.rie import rie_scores
 
 # Mitigantes por crédito (columnas calculadas), exigidos desde la hoja Mitigantes con Avalista, Garantía y FGA.
@@ -40,7 +43,7 @@ def tree_branch(series, order):
     values = series.astype("string").str.strip()
     return values.where(values.isin(order))
 
-def credit_mitigants(data, aval_cfg, gar_cfg):
+def credit_mitigants(data, aval_cfg, gar_cfg, params=None):
     """Agrega avalista_idoneo, garantia_idonea y fga, evaluados con los datos de la solicitud, y la rama del
     árbol de cada crédito. data.attrs["mitigantes_faltantes"] lista los campos que no vienen en la base."""
     data = data.copy()
@@ -50,7 +53,7 @@ def credit_mitigants(data, aval_cfg, gar_cfg):
         return pd.to_numeric(data.get(name, pd.Series(np.nan, index=data.index)).astype("string"), errors="coerce")
     data["valor_financiar"] = financed_amount(data)
     # Cuota con el plazo real de la solicitud (PlazoMeses) y, si falta, el plazo por defecto de la hoja RIE.
-    params = rie_params()
+    params = params or rie_params()
     data["cuota_calculada"] = monthly_payment(data, params["plazo_meses"])
 
     # Avalista idóneo: solo el avalista 1 (basta uno para el mitigante), con Acierta y capacidad de pago
@@ -86,6 +89,14 @@ def credit_mitigants(data, aval_cfg, gar_cfg):
     data.attrs["mitigantes_faltantes"] = missing
     return data
 
+@st.cache_data(show_spinner="Evaluando mitigantes…", max_entries=8)
+def base_mitigantes(params, aval_cfg, gar_cfg):
+    """credit_mitigants y percentil_acierta sobre la base filtrable, en caché por parámetros de RIE, avalista y
+    garantía: se recalcula solo cuando cambian."""
+    data = credit_mitigants(base_filtrable(), aval_cfg, gar_cfg, params)
+    data["percentil_acierta"] = percentil_acierta(data)
+    return data
+
 def meets(frame, need):
     """True/False si el crédito tiene los mitigantes exigidos; None si la rama o combinación no exige ninguno.
     Avalista: avalista 1 idóneo. Garantía: garantía idónea o, si además FGA está en 1, FGA. FGA solo (sin
@@ -117,12 +128,14 @@ def final_decisions(data, decisions, conditions):
     si cumplen los mitigantes exigidos (cumple), si cumplen solo por el FGA (cumple_por_fga)
     y la decisión final (decision_final)."""
     branched = data.dropna(subset=TREE_LEVELS).copy()
-    branched["rama"] = branched[TREE_LEVELS].astype(str).agg(" | ".join, axis=1)
+    branched["rama"] = unir(branched, TREE_LEVELS)
     return decide(branched, decisions, conditions)
 
 def matrix_decisions(data, decisions, conditions):
     """Igual que final_decisions, pero por combinación (tipo, nivel perfil, nivel vehículo) de la
-    matriz de la hoja Apetito. Solo entran los créditos con combinación completa (columna Combinación)."""
+    matriz de la hoja Apetito. Solo entran los créditos con combinación completa (columna Combinación).
+    Con decisions=None la decisión de cada crédito sale de su columna decision_matriz (la matriz de su
+    escenario, src/escenarios.py)."""
     combined = data.dropna(subset=["Combinación"]).copy()
     combined["rama"] = combined["Combinación"]
     # Los mitigantes se pueden exigir por combinación o por detalle (licencia/condición y RIE);
@@ -132,7 +145,8 @@ def matrix_decisions(data, decisions, conditions):
 
 def decide(branched, decisions, conditions):
     """Decisión de la rama o combinación (decision_arbol), cumplimiento de mitigantes y decisión final."""
-    branched["decision_arbol"] = branched["rama"].map(decisions)
+    branched["decision_arbol"] = (branched["decision_matriz"] if decisions is None
+                                  else branched["rama"].map(decisions))
     branched["cumple"] = pd.Series(pd.NA, index=branched.index, dtype="boolean")
     branched["cumple_por_fga"] = False
     key_col = "detalle" if "detalle" in branched else "rama"
@@ -148,3 +162,43 @@ def decide(branched, decisions, conditions):
         [APROBADO, A_ESTUDIO], SIN_DECISION)
     return branched
 
+
+def mitigantes_no_evaluables(data):
+    """Solicitudes cuyo avalista o garantías no se pueden evaluar, por variable. Devuelve un DataFrame con
+    Mitigante, Causa y la máscara booleana de cada causa (columna mask). Las filas «Sin ...» marcan solicitudes
+    sin datos del mitigante: se evalúan como no idóneas. Una solicitud puede tener varias causas."""
+    def field(name):
+        return pd.to_numeric(data.get(name, pd.Series(np.nan, index=data.index)).astype("string"), errors="coerce")
+    vehiculo = field("ValorVh")
+    financiar = vehiculo - field("MontoCtaInicial")
+    cuota = monthly_payment(data, rie_params()["plazo_meses"])
+    acierta, ingreso = field("Avalista1Acierta"), field("Avalista1IngresoTotalMensual")
+    # Sin avalista: no trae Acierta, ingreso ni ocupación (de la solicitud o de Gaviota).
+    ocupacion = pd.concat([data.get(c, pd.Series(pd.NA, index=data.index)).astype("string").str.strip().replace("", pd.NA)
+                           for c in ("Avalista1Ocupacion", "ocupacion_avalista")], axis=1).notna().any(axis=1)
+    sin_avalista = acierta.isna() & ingreso.isna() & ~ocupacion
+    aval = {
+        "Sin avalista (sin Acierta, ingreso ni ocupación)": sin_avalista,
+        "Acierta del avalista ausente": acierta.isna() & ~sin_avalista,
+        "Ingreso del avalista ausente o ≤ 0": ~ingreso.gt(0).fillna(False) & ~sin_avalista,
+        "Cuota no calculable (valor a financiar o tasa)": ~cuota.gt(0).fillna(False),
+    }
+    aval["Avalista no evaluable (alguna causa, sin contar «Sin avalista»)"] = (
+        aval["Acierta del avalista ausente"] | aval["Ingreso del avalista ausente o ≤ 0"]
+        | (aval["Cuota no calculable (valor a financiar o tasa)"] & ~sin_avalista))
+    valores = pd.concat([field(f"RPV{i}Valor") for i in GARANTIAS], axis=1)
+    modelos = pd.concat([field(f"RPV{i}Modelo") for i in GARANTIAS], axis=1)
+    con_valor = valores.gt(0).fillna(False).to_numpy(dtype=bool)
+    sin_garantias = ~con_valor.any(axis=1)
+    gar = {
+        "Sin garantías (RPV1 a RPV3 sin valor)": pd.Series(sin_garantias, index=data.index),
+        "Garantía con valor y sin modelo": pd.Series((con_valor & modelos.isna().to_numpy(dtype=bool)).any(axis=1), index=data.index),
+        "Garantía con modelo y sin valor": pd.Series((~con_valor & modelos.notna().to_numpy(dtype=bool)).any(axis=1), index=data.index),
+        "Valor del vehículo ausente o ≤ 0": ~vehiculo.gt(0).fillna(False),
+        "Valor a financiar no calculable o ≤ 0": ~financiar.gt(0).fillna(False),
+    }
+    gar["Garantía no evaluable (alguna causa, sin contar «Sin garantías»)"] = (
+        gar["Garantía con valor y sin modelo"] | gar["Garantía con modelo y sin valor"]
+        | ((gar["Valor del vehículo ausente o ≤ 0"] | gar["Valor a financiar no calculable o ≤ 0"]) & ~sin_garantias))
+    rows = [("Avalista", k, v) for k, v in aval.items()] + [("Garantía", k, v) for k, v in gar.items()]
+    return pd.DataFrame(rows, columns=["Mitigante", "Causa", "mask"])
