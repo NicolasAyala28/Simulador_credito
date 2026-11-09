@@ -153,3 +153,64 @@ def rie_scores(data, params=None, detail=False):
             exp_calificacion_ok=exp_rating_ok, exp_publica_ok=exp_public_ok, score_experiencia=experience_component,
             puntaje_sin_redondeo=ltv_score_all + income_component + experience_component)
     return result
+
+def rie_no_calculable(data, params=None):
+    """Solicitudes sin puntaje RIE y por qué. Devuelve (sin_rie, componentes, variables):
+    sin_rie es la máscara de solicitudes sin puntaje; componentes y variables son DataFrames booleanos con
+    una columna por componente o variable, solo sobre las solicitudes sin puntaje. Cada variable se lee igual
+    que en rie_scores; un valor que viene pero no es numérico se separa de uno ausente. Una solicitud puede
+    tener varias causas; «Otra causa» reúne las que no explica ninguna variable de la lista."""
+    params = params or DEFAULT_PARAMS
+    detail = rie_scores(data, params, detail=True)
+    sin_rie = detail["Puntaje"].isna()
+    limpias = {}
+    def raw(name):
+        # Cada columna se limpia como texto una sola vez.
+        if name not in limpias:
+            s = data[name] if name in data else pd.Series(pd.NA, index=data.index)
+            limpias[name] = s.astype("string").str.strip().replace("", pd.NA)
+        return limpias[name]
+    def ausente(name):
+        return raw(name).isna()
+    def no_numerico(name, parse=num):
+        value = parse(data[name]) if name in data else pd.Series(np.nan, index=data.index)
+        return raw(name).notna() & value.isna()
+    to_num = lambda s: pd.to_numeric(s, errors="coerce")
+    licencia = raw("licencia_vehiculo").str.upper()
+    vehiculo = num(data["ValorVh"]) if "ValorVh" in data else pd.Series(np.nan, index=data.index)
+    principal = financed_amount(data)
+    tasa = to_num(data["tasa_nominal"]) if "tasa_nominal" in data else pd.Series(np.nan, index=data.index)
+    ingresos = num(data["ingresos"]) if "ingresos" in data else pd.Series(np.nan, index=data.index)
+    fecha = pd.to_datetime(data.get("FechaProceso", pd.Series(pd.NaT, index=data.index)), format="mixed", errors="coerce")
+    sin_monto, sin_calif = ausente("MontoMaxSolicGeneral"), ausente("CalificacionMontoMax")
+    componentes = pd.DataFrame({
+        "Respaldo (LTV)": detail["score_ltv"].isna(),
+        "Ingresos (PTI, DTI, EI)": detail["score_ingresos"].isna(),
+        "Experiencia": detail["score_experiencia"].isna(),
+    }).where(sin_rie, False)
+    variables = pd.DataFrame({
+        "Licencia sin PAR/PUB": ~licencia.isin(list(LICENSES.values())).fillna(False),
+        "Valor del vehículo (ValorVh) ausente o ≤ 0": ~vehiculo.gt(0).fillna(False),
+        "Cuota inicial (MontoCtaInicial) ausente": ausente("MontoCtaInicial"),
+        "Valor a financiar ≤ 0 (cuota inicial ≥ valor del vehículo)": principal.le(0).fillna(False),
+        # clean_data deja vacíos los ingresos fuera de 1 a 100 millones mensuales.
+        "Ingresos ausentes o fuera de 1 a 100 millones": ~ingresos.gt(0).fillna(False),
+        "Tasa (TasaMV) ausente": ausente("tasa_nominal"),
+        # La cuota lee la tasa como número; una tasa con coma decimal o texto queda sin cuota.
+        "Tasa (TasaMV) no numérica o negativa": raw("tasa_nominal").notna() & ~tasa.ge(0).fillna(False),
+        "Cuota sector telcos (ValorCuotaCST) ausente o no numérica": num(data["ValorCuotaSectorTelcos"]).isna()
+            if "ValorCuotaSectorTelcos" in data else pd.Series(True, index=data.index),
+        # Monto máximo y calificación describen la misma obligación: se separa si faltan juntos o solo uno.
+        "Monto máximo y calificación ausentes (sin obligación de referencia)": sin_monto & sin_calif,
+        "Solo monto máximo ausente": sin_monto & ~sin_calif,
+        "Solo calificación del monto máximo ausente": sin_calif & ~sin_monto,
+        "Monto máximo no numérico": no_numerico("MontoMaxSolicGeneral"),
+        "Calificación del monto máximo no numérica (por ejemplo, en letra)": no_numerico("CalificacionMontoMax"),
+        "Fecha de la solicitud ausente o no válida": fecha.isna(),
+    })
+    # LTV fuera de los rangos de la hoja (por ejemplo, mayor a 100 %) con los datos del respaldo completos.
+    respaldo_incompleto = variables.iloc[:, :4].any(axis=1)
+    variables["LTV fuera de los rangos de la hoja"] = detail["score_ltv"].isna() & ~respaldo_incompleto
+    variables = variables.where(sin_rie, False)
+    variables["Otra causa"] = sin_rie & ~variables.any(axis=1)
+    return sin_rie, componentes, variables
