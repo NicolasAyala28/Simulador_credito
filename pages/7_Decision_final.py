@@ -3,11 +3,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.common import load_config
-from src.data_loader import load_data, prepare_data
-from src.apetito import add_apetito, percentil_acierta, seed_defaults
+from src.escenarios import asignar_apetito, sembrar
+from src.matrices import SHARE_SCALE, share_table, styled_gradient
 from src.decision import (A_ESTUDIO, APROBADO, CONDICIONES, FINAL_ORDER, SEGMENT_ORDER, SIN_DECISION,
-    credit_mitigants, matrix_decisions)
-from src.parametros import apetito_levels, mitigante_conditions, version_sidebar
+    base_mitigantes, matrix_decisions)
+from src.parametros import apetito_escenarios, mitigante_conditions, rie_params, version_sidebar
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Decisión final", page_icon="▦", layout="wide")
@@ -31,12 +31,12 @@ st.markdown("""
 
 # Misma base y reglas que Mitigantes: combinación (tipo, nivel perfil, nivel vehículo) de cada crédito,
 # decisión de su celda en la matriz de la hoja Apetito y mitigantes exigidos en la hoja Mitigantes.
-PREPARED = prepare_data(load_data()).reset_index(drop=True)
-MITIGATED = credit_mitigants(PREPARED, load_config("avalista"), load_config("garantia"))
-MITIGATED["percentil_acierta"] = percentil_acierta(MITIGATED)
-seed_defaults(apetito_levels(), SEGMENT_ORDER, MITIGATED.assign(Percentil=MITIGATED["percentil_acierta"]))
-DATA = add_apetito(MITIGATED, apetito_levels())
-FINAL = matrix_decisions(DATA, apetito_levels()["matriz"], mitigante_conditions())
+# En caché: solo se recalcula cuando cambian los parámetros de RIE, avalista o garantía.
+MITIGATED = base_mitigantes(rie_params(), load_config("avalista"), load_config("garantia"))
+sembrar(apetito_escenarios(), SEGMENT_ORDER, MITIGATED.assign(Percentil=MITIGATED["percentil_acierta"]))
+# Base Solicitudes: cada crédito usa su escenario de apetito (src/escenarios.py); sin filtros, el general.
+DATA = asignar_apetito(MITIGATED, "Solicitudes", apetito_escenarios())
+FINAL = matrix_decisions(DATA, None, mitigante_conditions())
 total = len(FINAL)
 n_out = len(DATA) - total
 if not total:
@@ -103,6 +103,63 @@ if n_out:
     note += (f" {format_n(n_out)} créditos no entran: sin RIE calculable, sin nivel de perfil o de vehículo, "
              "o sin dato de productivo.")
 st.caption(note)
+
+# ---------------- Comparativo por base ----------------
+# Base Desembolsos: desembolsos con concesionario, canal, marca y categoría, con los escenarios de esa base
+# (el más específico que cumple cada crédito; si no, el de Desembolsos sin filtros).
+DES_DATA = MITIGATED[MITIGATED["filtrable_desembolso"]]
+FINAL_DES = matrix_decisions(asignar_apetito(DES_DATA, "Desembolsos", apetito_escenarios()), None,
+                             mitigante_conditions()) if len(DES_DATA) else FINAL.iloc[:0]
+GRUPOS = {"Desembolsos": FINAL_DES, "Solicitudes": FINAL}
+
+st.markdown('<div class="fa-section">Comparativo por base: Solicitudes y Desembolsos</div>', unsafe_allow_html=True)
+comp = pd.DataFrame({g: d["decision_final"].value_counts().reindex(labels, fill_value=0) for g, d in GRUPOS.items()}).T
+shares_base = comp.div(comp.sum(axis=1).where(comp.sum(axis=1) > 0), axis=0).mul(100)
+with st.container(border=True):
+    fig = go.Figure()
+    for label in labels:
+        fig.add_bar(y=comp.index, x=shares_base[label], name=label, orientation="h", customdata=comp[label],
+            marker=dict(color=DECISION_COLORS[label], line=dict(color="white", width=2)),
+            text=shares_base[label].map(lambda v: f"{v:.0f}%" if v >= 5 else ""), textposition="inside",
+            insidetextanchor="middle", textfont=dict(color="white", size=11),
+            hovertemplate="%{y} · " + label + ": %{customdata:,} créditos (%{x:.1f}%)<extra></extra>")
+    fig.update_layout(barmode="stack", height=240, margin=dict(l=8, r=8, t=20, b=20),
+        legend=dict(orientation="h", y=-0.25, x=0.5, xanchor="center", traceorder="normal"),
+        xaxis=dict(range=[0, 100], ticksuffix="%", gridcolor="#E5EFEA", title=None),
+        yaxis=dict(autorange="reversed", title=None, ticksuffix="  "),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT), separators=",.")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key="decision_bases")
+st.caption(f"Solicitudes ({format_n(comp.loc['Solicitudes'].sum())} créditos): la base de análisis, con los escenarios "
+           f"de la base Solicitudes. Desembolsos ({format_n(comp.loc['Desembolsos'].sum())} créditos): desembolsos con "
+           "concesionario, canal comercial, marca y categoría, con los escenarios de la base Desembolsos.")
+
+# ---------------- Motor actual x versión activa (no desembolsadas) ----------------
+NO_DES = FINAL[~FINAL["desembolsado_base"].astype(bool)].copy()
+if "FrankDecision" in NO_DES:
+    # Se omiten las negadas por el motor: las negó el departamento de riesgo o el código de Acierta, no la política.
+    NEGADAS = NO_DES["FrankDecision"].astype("string").str.strip().str.casefold().str.startswith("neg").fillna(False)
+    N_NEGADAS = int(NEGADAS.sum())
+    NO_DES = NO_DES[~NEGADAS]
+    st.markdown('<div class="fa-section">No desembolsadas: decisión del motor actual × decisión de la versión '
+                'activa</div>', unsafe_allow_html=True)
+    if NO_DES.empty:
+        st.info("No hay solicitudes no desembolsadas sin negar por el motor actual.")
+    else:
+        NO_DES["Motor actual"] = NO_DES["FrankDecision"].astype("string").str.strip().replace("", pd.NA).fillna("Sin dato")
+        motor = sorted(NO_DES["Motor actual"].unique().tolist(), key=lambda v: (v == "Sin dato", v))
+        segs = ["Todos"] + [s for s in SEGMENT_ORDER if NO_DES["Segmento"].eq(s).any()]
+        for seg, tab in zip(segs, st.tabs(segs)):
+            with tab:
+                d = NO_DES if seg == "Todos" else NO_DES[NO_DES["Segmento"].eq(seg)]
+                table, _, pct = share_table(d, "Motor actual", "decision_final", motor, labels,
+                                            "Motor actual (FrankDecision)", False)
+                st.dataframe(styled_gradient(table, pct, SHARE_SCALE), width="stretch", key=f"motor_vs_{seg}")
+    st.caption("Filas: decisión del motor actual (FrankDecision). Columnas: decisión final con la versión activa. "
+               "Cada celda es la cantidad y la proporción sobre el total de no desembolsadas de la pestaña. "
+               f"Se omiten {format_n(N_NEGADAS)} solicitudes negadas por el motor actual: las negó el departamento de "
+               "riesgo o el código de Acierta. Las que el motor dejó en estudio y la versión activa aprueba son las de "
+               "mayor interés para rescatar; las aprobadas por el motor que no se desembolsaron no se deben a la "
+               "decisión de crédito.")
 
 # ---------------- Solicitudes sin decisión ----------------
 # Quedan sin decisión las celdas de la matriz sin valor y las celdas en Condiciones sin avalista ni garantía exigidos:
