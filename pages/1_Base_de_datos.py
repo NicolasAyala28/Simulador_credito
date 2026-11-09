@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
-from src.data_loader import exclusion_notes, load_data, prepare_data, study_periods
+from src.data_loader import base_preparada, exclusion_notes, study_periods
 
 st.set_page_config(page_title="Base de datos", page_icon="🚘", layout="wide")
 from src.theme import apply_finanzauto_theme
 apply_finanzauto_theme()
 
-df = prepare_data(load_data())
+df = base_preparada()
 st.title("1. Base de datos")
 st.write("Resumen de la base de estudio, periodo, volumen de registros y auditoría de calidad de datos.")
 

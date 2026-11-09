@@ -3,16 +3,17 @@ Mitigantes (versión de parámetros activa) y muestra la decisión final."""
 import json
 from datetime import date
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
-from src.apetito import PRODUCTIVO_ORDER, VEHICULO_ORDER, combinacion_key, seed_defaults, valor_financiar
+from src.apetito import PRODUCTIVO_ORDER, VEHICULO_ORDER, combinacion_key, vehiculo_key
 from src.common import financed_amount, monthly_payment
-from src.data_loader import (CODIGOS_SOLICITUD_PATH, MAX_FINANCIACION, MIN_FINANCIACION, OCUPACION_AVAL_PATH, load_data,
+from src.data_loader import (CODIGOS_SOLICITUD_PATH, MAX_FINANCIACION, MIN_FINANCIACION, OCUPACION_AVAL_PATH,
     prepare_data)
+from src.escenarios import aplicar_cortes, cortes_escenario, escenario_aplicable, escenario_filtros, sembrar
+from src.filtros import base_filtrable, filtros_desembolso, nota_desembolsos, selector_base
 from src.decision import A_ESTUDIO, APROBADO, CONDICIONES, RIE_GROUPS, SEGMENT_ORDER, meets
-from src.parametros import apetito_levels, mitigante_conditions, rie_params, version_sidebar
+from src.parametros import apetito_escenarios, mitigante_conditions, rie_params, version_sidebar
 from src.rie import rie_scores
 from src.theme import apply_finanzauto_theme
 
@@ -46,17 +47,24 @@ st.markdown("""
 
 # Base de referencia: con ella se ubica el puntaje en su decil (dentro del segmento) y el valor a financiar en
 # su quintil, igual que en la hoja Apetito.
-BASE = prepare_data(load_data())
-levels = apetito_levels()
-seed_defaults(levels, SEGMENT_ORDER)
+# La base de referencia se elige con los mismos filtros de base y de desembolso de las hojas RIE y Apetito.
+BASE_COMPLETA = base_filtrable()
+st.markdown("**Base de referencia** · decil del puntaje y quintil del valor a financiar")
+c_base, c_n = st.columns([1, 2], gap="medium")
+base_ref = selector_base("prueba_base", c_base)
+BASE, elegidos_ref = filtros_desembolso(BASE_COMPLETA, base_ref, "prueba")
+c_n.metric("Con los filtros actuales", format_n(len(BASE)),
+           help=f"Registros de la base {base_ref} con los que se ubican el decil y el quintil de la solicitud.")
+if base_ref == "Desembolsos":
+    st.caption(nota_desembolsos(BASE_COMPLETA))
+sembrar(apetito_escenarios(), SEGMENT_ORDER)
+# Escenario de apetito de estos filtros (o su respaldo), con sus niveles y sus rangos y deciles: los mismos que
+# aplican Apetito y Mitigantes a una solicitud con esos filtros.
+ESC_CLAVE, levels = escenario_aplicable(apetito_escenarios(), escenario_filtros(base_ref, elegidos_ref))
+CORTES = levels.get("cortes") or cortes_escenario(levels["filtros"])
+st.caption(f"Escenario de apetito aplicado: **{ESC_CLAVE}**"
+           + ("" if levels.get("cortes") else " (rangos y deciles calculados con los datos actuales)") + ".")
 conditions = mitigante_conditions()
-
-def rango(valor, referencia, partes):
-    """Posición de valor en la distribución de referencia: 1..partes (mismo criterio que el rango con empates)."""
-    ref = pd.to_numeric(referencia, errors="coerce").dropna()
-    if ref.empty or pd.isna(valor):
-        return None
-    return int(min(max(np.ceil(ref.le(valor).mean() * partes), 1), partes))
 
 # ---------------- Formulario ----------------
 with st.form("prueba_form"):
@@ -132,14 +140,14 @@ prep = prepare_data(solicitud, incluir_sin_dato=True)
 segmento = prep["segmentacion"].iloc[0]
 rie = rie_scores(prep, rie_params(), detail=True).iloc[0]
 rie_grupo = RIE_GROUPS.get(int(rie["Normalización"])) if pd.notna(rie["Normalización"]) else None
-base_seg = BASE.loc[BASE["segmentacion"].eq(segmento), "acierta"]
-decil = rango(puntaje, base_seg, 10)
-decil = f"P{decil * 10}" if decil else None
-valor_q = rango(financiar, valor_financiar(BASE).where(lambda v: v > 0), 5)
-valor_q = f"V{valor_q}" if valor_q else None
+# Decil del puntaje (en su segmento) y rango del valor a financiar con los cortes del escenario.
+decil, valor_q = aplicar_cortes(pd.DataFrame({"acierta": [puntaje], "perfil_label": [segmento], "ValorVh": [valor_vh],
+                                              "MontoCtaInicial": [cuota_ini]}), CORTES)
+decil = decil.iloc[0] if pd.notna(decil.iloc[0]) else None
+valor_q = valor_q.iloc[0] if pd.notna(valor_q.iloc[0]) else None
 vehiculo = f"{licencia}/{condicion}"
 nivel_perfil = levels["perfil"].get(f"{segmento} | {rie_grupo} | {decil}")
-nivel_vehiculo = levels["vehiculo"].get(f"{destino} | {valor_q} | {vehiculo}")
+nivel_vehiculo = levels["vehiculo"].get(vehiculo_key(segmento, destino, valor_q, vehiculo))
 combo = combinacion_key([destino, nivel_perfil, nivel_vehiculo])
 decision_matriz = levels["matriz"].get(combo) if nivel_perfil and nivel_vehiculo else None
 

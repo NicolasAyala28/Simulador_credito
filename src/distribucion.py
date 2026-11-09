@@ -1,7 +1,7 @@
 """Datos, filtro y estilos compartidos por las dos hojas de Población."""
 import streamlit as st
 
-from src.data_loader import load_data, prepare_data
+from src.data_loader import base_preparada
 
 # Paleta verde corporativa inspirada en Finanzauto.
 GREEN_PALETTE = ["#064B39", "#008F65", "#35B779", "#A4CE39", "#2F6B4F", "#70C1A1", "#C5DF8B"]
@@ -32,7 +32,7 @@ def format_pct(part, total):
 def load_distribution_data():
     """Devuelve (base, df): base conserva los registros sin ocupación principal ('Sin dato')
     para contarlos; df es la población de análisis, solo con segmento."""
-    base = prepare_data(load_data(), incluir_sin_dato=True)
+    base = base_preparada(incluir_sin_dato=True)
     df = base[base["segmentacion"].ne("Sin dato")].copy()
     # Excluir perfiles nulos/erróneos y la categoría "Otros".
     invalid_profile_values = {"otros", "otro", "nan", "none", "null", ""}

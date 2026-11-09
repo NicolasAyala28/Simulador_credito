@@ -1,11 +1,11 @@
 import streamlit as st
-from src.data_loader import load_data, prepare_data, study_periods
+from src.data_loader import base_preparada, study_periods
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Simulador de crédito vehicular", page_icon="🚘", layout="wide")
 apply_finanzauto_theme()
 
-df = prepare_data(load_data())
+df = base_preparada()
 
 st.markdown("""
 <div class="fa-hero">
@@ -34,7 +34,7 @@ cards = [
     ("04", "RIE", "Respaldo, Ingresos y Experiencia: reglas, distribuciones y puntaje 0–7.",
      [("pages/4_RIE.py", "Abrir módulo →")]),
     ("05", "Apetito", "Matrices de vehículo y perfil, y decisión perfil × vehículo por tipo de crédito.",
-     [("pages/5_Apetito.py", "Abrir módulo →")]),
+     [("pages/5_Apetito.py", "Abrir módulo →"), ("pages/5_Apetito_2.py", "Cuota inicial y valor del vehículo →")]),
     ("06", "Mitigantes", "Avalista, garantía, FGA y desistir en las combinaciones en Condiciones.",
      [("pages/6_Mitigantes.py", "Abrir módulo →")]),
     ("07", "Decisión final", "Resultado luego de mitigantes: total, por segmento y solicitudes sin decisión.",

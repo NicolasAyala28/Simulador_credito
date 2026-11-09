@@ -14,6 +14,11 @@ streamlit run app.py
 
 Después de cambiar archivos de `src/` hay que reiniciar Streamlit; los cambios en `pages/` se ven al recargar.
 
+Rendimiento: la base preparada (`base_preparada` en `src/data_loader.py`, `base_filtrable` en `src/filtros.py`), los
+mitigantes por crédito (`base_mitigantes` en `src/decision.py`, por parámetros de RIE, avalista y garantía) y los
+cortes de cada escenario (`cortes_escenario` en `src/escenarios.py`) se guardan en caché. Después de regenerar la
+base hay que reiniciar Streamlit o limpiar la caché (menú ⋮ → Clear cache).
+
 ## Hojas
 
 Orden del menú: 1 Base de datos · 2 Población (segmentos y ocupaciones, y gráficas) · 3 Cosechas (General y Segmento)
@@ -40,7 +45,7 @@ guardado de la base del simulador): solicitudes de `frank_requests` con la respu
 `prepare_data` aplica además:
 
 - **Alcance:** omite las solicitudes con valor a financiar (`ValorVh − MontoCtaInicial`) mayor a 180 millones
-  (`MAX_FINANCIACION`) o menor a 10 millones, incluidos los negativos (`MIN_FINANCIACION`). Base de datos y Apetito muestran
+  (`MAX_FINANCIACION`) o menor a 1 millón, incluidos los negativos (`MIN_FINANCIACION`), y los créditos de categoría Libre inversión (`CATEGORIAS_EXCLUIDAS`; por ahora solo vehiculares). Base de datos y Apetito muestran
   cuántas se omiten en «Notas sobre registros omitidos», al final de la hoja (`exclusion_notes`); en Apetito esa
   sección reúne también los demás avisos (RIE no calculable, desembolsadas fuera de la mora del vehículo, mora
   ausente). La hoja Evaluar solicitud no evalúa solicitudes fuera de ese rango.
@@ -58,8 +63,9 @@ Inicio y Base de datos muestran el periodo de solicitudes (`FechaProceso`) y el 
 ## Parámetros y versiones
 
 Una versión reúne los parámetros RIE, las matrices de apetito y decisión de la hoja Apetito y los mitigantes exigidos. Lo
-editado en una hoja se aplica en las demás durante la sesión. Al abrir la app se carga `na_v4` (`INITIAL_VERSION` en
-`src/parametros.py`) o, si ese archivo no existe, la versión 1 (`config/versiones/base_v1.json`, fija). «Guardar como nueva versión» (barra lateral) crea
+editado en una hoja se aplica en las demás durante la sesión. Al abrir la app se carga la versión 1 (`config/versiones/base_v1.json`, fija;
+`INITIAL_VERSION` en `src/parametros.py`): RIE, apetito por defecto en los escenarios Solicitudes y Desembolsos (matriz de
+vehículo por segmento) y mitigantes sin asignar. «Guardar como nueva versión» (barra lateral) crea
 `config/versiones/<nombre>_v<N>.json` sin sobrescribir otras; cada usuario solo elimina sus versiones. Las matrices
 vacías se llenan con `config/apetito_default.json`. La lógica está en `src/parametros.py`, `src/apetito.py` y
 `src/decision.py`.
@@ -119,6 +125,11 @@ con concentración y mora arriba y la matriz editable abajo.
 
 `pages/7_Decision_final.py`: misma regla que Mitigantes (`matrix_decisions` en `src/decision.py`) sobre todas las
 solicitudes con combinación completa; torta total, barras y tabla por segmento.
+- **Comparativo por base:** una barra por base con la distribución de la decisión: Solicitudes (la base de análisis,
+  con sus escenarios) y Desembolsos (con los escenarios de esa base).
+- **Motor actual × versión activa:** solicitudes no desembolsadas por decisión del motor actual (`FrankDecision`) y
+  decisión final de la versión activa, sobre el total y por segmento. Se omiten las negadas por el motor
+  (departamento de riesgo o código de Acierta).
 
 ## Hoja Evaluar solicitud
 

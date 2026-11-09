@@ -6,15 +6,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.common import financed_amount, monthly_payment
-from src.data_loader import load_data, prepare_data
+from src.filtros import base_filtrable, filtros_desembolso, nota_desembolsos, selector_base
 from src.parametros import bind, rie_params, version_sidebar
-from src.rie import DEFAULT_PARAMS, LICENSES, LTV_SCORES, garantia_publica, rie_scores
+from src.rie import DEFAULT_PARAMS, LICENSES, LTV_SCORES, garantia_publica, rie_no_calculable, rie_scores
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="RIE · Componentes y reglas", page_icon="◈", layout="wide")
 apply_finanzauto_theme()
 
-DATA = prepare_data(load_data()).copy()
+DATA = base_filtrable()
 # Parámetros compartidos con Apetito, Mitigantes y Decisión final: los editores de esta hoja los modifican en sitio.
 PARAMS = rie_params()
 GREEN = "#087A55"
@@ -181,9 +181,17 @@ def classify_ranges(series, mins, maxs, scores, valid=True):
     return result
 
 # Perfil global: solo filtra las distribuciones; los parámetros aplican a toda la base.
+# Base (Solicitudes / Desembolsos) y filtros de desembolso (src/filtros.py): como el perfil, solo filtran.
 profile_options = ["Todos"] + sorted(DATA["perfil_label"].dropna().astype(str).unique().tolist())
-profile = st.selectbox("Perfil", profile_options, key="rie_profile")
-VIEW = DATA if profile == "Todos" else DATA[DATA["perfil_label"].astype(str).eq(profile)]
+c_base, c_profile = st.columns([1, 2], gap="medium")
+base_rie = selector_base("rie_base", c_base)
+profile = c_profile.selectbox("Perfil", profile_options, key="rie_profile")
+BASE_RIE, _ = filtros_desembolso(DATA, base_rie, "rie")
+VIEW = BASE_RIE if profile == "Todos" else BASE_RIE[BASE_RIE["perfil_label"].astype(str).eq(profile)]
+st.metric("Con los filtros actuales", format_n(len(VIEW)), border=True,
+          help=f"Registros de la base {base_rie} que quedan con los filtros seleccionados.")
+if base_rie == "Desembolsos":
+    st.caption(nota_desembolsos(DATA))
 
 # ---------------- Respaldo / LTV ----------------
 banner("Respaldo – LTV", "Relación entre el valor a financiar y el valor del vehículo (garantía).", "◈")
@@ -377,5 +385,41 @@ if all_licenses.loc[VIEW.index].eq("PUB").any():
                 f"de servicio público. {format_n(n_gar)} de {format_n(n_pub)} créditos públicos "
                 f"({n_gar / n_pub * 100:.1f}%) la tienen; el resto no suma el punto de Experiencia.")
 st.caption("Notas: las fechas faltantes o no válidas de FechaAperturaMontoMax se reemplazan temporalmente por la fecha de hoy para calcular Experiencia; por ello, esos registros no cumplirán el requisito de antigüedad mínima de un año. Los rangos y parámetros editados se aplican en Apetito, Mitigantes y Decisión final durante la sesión y se conservan al guardarlos como versión en la barra lateral. Las calificaciones de PTI/DTI/EI aplican los umbrales de la PPT por licencia y estado civil. La normalización sigue la tabla de la PPT: puntajes 0–1→0, 2–3→1, 4–5→2 y 6–7→3. La cuota usa el plazo real de cada solicitud (PlazoMeses) y la tasa mensual (TasaMV).")
+
+# ---------------- Solicitudes sin RIE calculable ----------------
+st.markdown("---")
+banner("Solicitudes sin RIE calculable", f"Componentes y variables que impiden calcular el puntaje, sobre la base {base_rie}.", "⚠")
+sin_rie, rie_componentes, rie_variables = rie_no_calculable(BASE_RIE, PARAMS)
+n_base, n_sin = len(BASE_RIE), int(sin_rie.sum())
+def pct(n, total):
+    return n / total * 100 if total else 0.0
+m1, m2, m3 = st.columns(3)
+m1.metric(f"Solicitudes de la base {base_rie}", format_n(n_base))
+m2.metric("Sin RIE calculable", format_n(n_sin), f"{pct(n_sin, n_base):.1f}% de la base", delta_color="off")
+m3.metric("Con RIE calculable", format_n(n_base - n_sin), f"{pct(n_base - n_sin, n_base):.1f}% de la base", delta_color="off")
+def resumen(masks, nombre):
+    conteo = masks.sum().astype(int)
+    tabla = pd.DataFrame({nombre: conteo.index, "Solicitudes": conteo.to_numpy(),
+                          "% de la base": [pct(n, n_base) for n in conteo],
+                          "% de las sin RIE": [pct(n, n_sin) for n in conteo]})
+    return tabla[tabla["Solicitudes"].gt(0)].sort_values("Solicitudes", ascending=False)
+RESUMEN_CONFIG = {"Solicitudes": st.column_config.NumberColumn("Solicitudes", format="localized"),
+                  "% de la base": st.column_config.NumberColumn("% de la base", format="%.2f%%"),
+                  "% de las sin RIE": st.column_config.NumberColumn("% de las sin RIE", format="%.1f%%")}
+if n_sin:
+    c_comp, c_var = st.columns([1, 1.6], gap="medium")
+    with c_comp:
+        st.markdown("**Por componente**")
+        st.dataframe(resumen(rie_componentes, "Componente"), width="stretch", hide_index=True, column_config=RESUMEN_CONFIG)
+    with c_var:
+        st.markdown("**Por variable**")
+        st.dataframe(resumen(rie_variables, "Variable"), width="stretch", hide_index=True, column_config=RESUMEN_CONFIG)
+    st.caption(f"Sobre la base {base_rie} con sus filtros, sin el filtro de perfil de la hoja. Una solicitud puede faltar en más de un componente "
+               "o variable, así que las filas no suman el total. Basta un componente sin calcular para que no haya "
+               "puntaje. La fecha de apertura del monto máximo no aparece porque se imputa (ver notas). «Otra causa»: "
+               "solicitudes sin puntaje que no explica ninguna variable de la lista; si aparece, hay una regla del "
+               "cálculo que la lista no cubre y conviene revisarla.")
+else:
+    st.success("Todas las solicitudes de la base tienen RIE calculable.")
 
 version_sidebar()

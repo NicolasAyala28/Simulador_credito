@@ -5,19 +5,22 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.data_loader import exclusion_notes, load_data, prepare_data
+from src.data_loader import exclusion_notes
+from src.filtros import base_filtrable, filtros_desembolso, nota_desembolsos, selector_base
 from src.apetito import (PRODUCTIVO_ORDER, PRODUCTIVO_SIN_DATO, PERCENTILES, VALOR_RANGOS, VEHICULO_ORDER, add_apetito,
-    percentil_acierta, seed_defaults, valor_etiquetas, valor_rango)
-from src.parametros import DECISION_OPTIONS, NIVELES, apetito_levels, rie_params, version_sidebar
+    percentil_acierta, vehiculo_key)
+from src.escenarios import aplicar_cortes, cortes_escenario, escenario_activo, escenario_filtros, etiquetas, sembrar
+from src.parametros import DECISION_OPTIONS, NIVELES, apetito_escenarios, rie_params, version_sidebar
 from src.rie import rie_scores
+from src.matrices import mora_separation
 from src.theme import apply_finanzauto_theme
 
 st.set_page_config(page_title="Apetito", page_icon="🎯", layout="wide")
 apply_finanzauto_theme()
 
-DATA = prepare_data(load_data())
+# Base preparada y con las columnas de los filtros, en caché (src/filtros.py).
+DATA = base_filtrable()
 DATA_FULL_ATTRS = dict(DATA.attrs)
-DATA = DATA.reset_index(drop=True)
 
 TEXT = "#0A2F4A"
 # Antigüedad mínima desde el desembolso (meses de vida) para comparar créditos maduros.
@@ -65,10 +68,8 @@ valid_profile_mask = profiles.notna() & ~profiles.str.casefold().isin(invalid_pr
 DATA = DATA[valid_profile_mask].copy()
 DATA["perfil_label"] = profiles[valid_profile_mask].astype(str)
 profile_options = sorted(DATA["perfil_label"].unique().tolist())
-# Decil de acierta por segmento y rango de valor a financiar, sobre toda la base, antes de los filtros de la hoja.
-DATA["percentil_acierta"] = percentil_acierta(DATA)
-DATA["valor_rango"] = valor_rango(DATA)
-VALOR_LABELS = valor_etiquetas(DATA, DATA["valor_rango"])
+DATA_FILTROS = DATA
+DESEMBOLSADO = DATA["desembolsado_base"]
 
 def tree_branch(series, order):
     values = series.astype("string").str.strip()
@@ -77,24 +78,49 @@ def tree_branch(series, order):
 # RIE con los parámetros editados en la hoja RIE en esta sesión (o los guardados), sobre toda la base:
 # con él se calibra el perfil por defecto de cada segmento y luego se filtra con la hoja.
 RIE_ALL = rie_scores(DATA, rie_params())["Normalización"].map(RIE_GROUPS)
-levels = apetito_levels()
-seed_defaults(levels, SEGMENT_ORDER, pd.DataFrame({
-    "Segmento": tree_branch(DATA["perfil_label"], SEGMENT_ORDER), "RIE": RIE_ALL, "Percentil": DATA["percentil_acierta"],
+sembrar(apetito_escenarios(), SEGMENT_ORDER, pd.DataFrame({
+    "Segmento": tree_branch(DATA["perfil_label"], SEGMENT_ORDER), "RIE": RIE_ALL,
+    # La calibración del perfil por defecto usa el decil de acierta sobre toda la base, no el de los filtros.
+    "Percentil": percentil_acierta(DATA),
     "mora_max_15m": DATA.get("mora_max_15m"), "meses_vida": DATA.get("meses_vida")}))
 
-c_profile,c_age = st.columns(2,gap="medium")
+c_base,c_profile,c_age = st.columns([1,1.4,1.6],gap="medium")
+base_analisis = selector_base("matrices_base", c_base)
 with c_profile:
     selected_profile = st.selectbox("Segmento",["Todos"]+profile_options,key="matrices_profile_filter")
 with c_age:
     # Por defecto 15 meses: créditos con la ventana de mora completa.
     min_age_label = st.radio("Antigüedad mínima",list(MIN_AGE_OPTIONS),index=2,horizontal=True,key="matrices_min_age",
         help="Meses desde el desembolso hasta la fecha de corte. Los créditos cancelados antes se conservan.")
+ES_DESEMBOLSOS = base_analisis == "Desembolsos"
+DATA, selected_filters = filtros_desembolso(DATA, base_analisis, "matrices")
+# Escenario de los filtros (src/escenarios.py): base y filtros de desembolso con valor específico. Sus cortes
+# (rangos de valor y deciles) se calculan sobre esta base, antes de la antigüedad y el segmento, que solo filtran.
+FILTROS_ESC = escenario_filtros(base_analisis, selected_filters)
+ESC_CLAVE, levels, ESC_EXISTE = escenario_activo(apetito_escenarios(), FILTROS_ESC)
+CORTES = levels.get("cortes") or cortes_escenario(FILTROS_ESC)
+
 if MIN_AGE_OPTIONS[min_age_label] and "meses_vida" in DATA:
     # La antigüedad solo aplica a las desembolsadas; las solicitudes sin desembolso (sin meses de vida) se conservan.
     vida = DATA["meses_vida"]
     DATA = DATA[vida.ge(MIN_AGE_OPTIONS[min_age_label]).fillna(False) | vida.isna()]
 DATA = DATA if selected_profile=="Todos" else DATA[DATA["perfil_label"]==selected_profile]
+
+st.metric("Con los filtros actuales", format_int(len(DATA)), border=True,
+          help=f"Registros de la base {base_analisis} que quedan con los filtros seleccionados.")
+
 profile_key = slug(selected_profile)
+
+# Decil de acierta por segmento y quintil del valor a financiar con los cortes del escenario.
+DATA = DATA.copy()
+DATA["percentil_acierta"], DATA["valor_rango"] = aplicar_cortes(DATA, CORTES)
+if ESC_EXISTE:
+    st.info(f"Escenario **{ESC_CLAVE}**: niveles guardados en la sesión"
+            + (" con rangos y deciles fijados al guardar." if levels.get("cortes") else
+               "; rangos y deciles calculados con los datos actuales (se fijan al pulsar «Guardar configuración»)."))
+else:
+    st.info(f"Escenario **{ESC_CLAVE}** sin configuración propia: se muestran los niveles del escenario de respaldo. "
+            "Al pulsar «Guardar configuración» se crea con lo editado y con los rangos y deciles de estos filtros.")
 
 # ---------------- Datos por crédito ----------------
 APETITO = add_apetito(pd.DataFrame({
@@ -118,6 +144,8 @@ if no_rie:
     NOTAS.append(f"Solicitudes con RIE no calculable: {format_int(no_rie)} ({no_rie / total_tree * 100 if total_tree else 0:.1f}%) "
                  f"de {format_int(total_tree)}. No entran en la matriz de perfil ni en la decisión porque les falta "
                  "información para el puntaje RIE (ver hoja RIE).")
+if ES_DESEMBOLSOS:
+    NOTAS.append(nota_desembolsos(DATA_FILTROS))
 mora_15m = pd.to_numeric(DATA.get("mora_max_15m", pd.Series(np.nan, index=DATA.index)), errors="coerce")
 # Sin la mora de la base, las tablas de mora quedan vacías: se avisa en lugar de mostrar ceros sin explicación.
 if "mora_max_15m" not in DATA:
@@ -126,6 +154,12 @@ if "mora_max_15m" not in DATA:
 elif mora_15m.notna().sum() == 0:
     NOTAS.append("La columna mora_max_15m viene vacía en todos los créditos de la base: las tablas de mora quedan "
                  "vacías. Revisa en el notebook la unión de los desembolsos con la mora (query_comite).")
+if "desembolsado" not in DATA:
+    NOTAS.append("La base no trae la columna desembolsado: se toman como desembolsadas las solicitudes con mora "
+                 "registrada. Regenera la base con el notebook generacion_base (celda de unión), que la crea.")
+elif not DESEMBOLSADO.any():
+    NOTAS.append("Ninguna solicitud de la base está marcada como desembolsada: revisa en el notebook generacion_base "
+                 "el cruce de solicitudes con desembolsos (NumeroSolicitud = numero_solicitud).")
 # Fuera del formulario para que el filtro se aplique de inmediato, sin esperar a «Guardar configuración».
 # Por defecto mora > 90: la definición de incumplimiento de originación.
 mora_label = st.radio("Mora máxima a 15 meses", list(MORA_FILTROS), index=2, horizontal=True, key="arbol_apetito_mora",
@@ -133,83 +167,12 @@ mora_label = st.radio("Mora máxima a 15 meses", list(MORA_FILTROS), index=2, ho
 # Sin dato de mora no cuenta como mora.
 APETITO["con_mora"] = mora_15m.gt(MORA_FILTROS[mora_label]).fillna(False)
 # La mora solo existe en las solicitudes desembolsadas: las tablas de mora se miden sobre ellas.
-# Sin la marca desembolsado, se toman como desembolsadas las que tienen mora registrada.
-APETITO["desembolsado"] = (pd.to_numeric(DATA["desembolsado"], errors="coerce").eq(1) if "desembolsado" in DATA
-                           else mora_15m.notna())
+APETITO["desembolsado"] = DESEMBOLSADO.loc[DATA.index]
 # Las llaves de los editores cambian con los filtros para que una edición no pase a otra celda.
-filters_key = "_".join([profile_key, slug(min_age_label)])
+filters_key = "_".join([slug(base_analisis), profile_key, slug(min_age_label)]
+                       + [slug(v) for v in selected_filters.values()])
 
-# Degradados de las tablas: verde para la proporción de créditos y blanco -> amarillo -> rojo para la mora.
-SHARE_SCALE = [(0.0, (255, 255, 255)), (1.0, (67, 189, 131))]
-MORA_SCALE = [(0.0, (255, 255, 255)), (0.5, (255, 214, 91)), (1.0, (232, 76, 61))]
-
-def gradient_css(value, vmax, scale):
-    """Color de fondo de la celda según su valor sobre el máximo de la tabla."""
-    if pd.isna(value) or not vmax or value <= 0:
-        return ""
-    t = min(float(value) / vmax, 1.0)
-    for (t0, c0), (t1, c1) in zip(scale, scale[1:]):
-        if t <= t1:
-            f = (t - t0) / (t1 - t0)
-            r, g, b = (round(a + (b_ - a) * f) for a, b_ in zip(c0, c1))
-            return f"background-color: rgb({r},{g},{b}); color: #0A2F4A"
-    return ""
-
-def styled_gradient(table, values, scale):
-    """Aplica el degradado a las celdas de table con los números de values (mismas filas y columnas);
-    las columnas que no están en values (Total) quedan sin color. Cada columna de values se escala aparte
-    si su nombre empieza por %, el resto con el máximo común de las celdas."""
-    cells = [c for c in values.columns if not str(c).startswith("%")]
-    vmax = values[cells].max().max() if cells else 0
-    def colors(_):
-        out = pd.DataFrame("", index=table.index, columns=table.columns)
-        for c in values.columns:
-            top = values[c].max() if str(c).startswith("%") else vmax
-            out[c] = [gradient_css(v, top, scale) for v in values[c]]
-        return out
-    return table.style.apply(colors, axis=None)
-
-def cell_text(n, pct):
-    return f"{format_int(n)} ({pct:.1f}%)" if n else "–"
-
-def share_table(data, row_col, col_col, rows, cols, row_name, by_row, row_labels=None):
-    """Cantidad (proporción) por celda. La proporción es sobre el total de la fila (by_row) o sobre el total
-    de la tabla. La columna Total lleva el total de la fila y su proporción."""
-    counts = pd.crosstab(data[row_col], data[col_col]).reindex(index=rows, columns=cols, fill_value=0)
-    counts["Total"] = counts.sum(axis=1)
-    base = counts["Total"].where(counts["Total"] > 0) if by_row else (counts["Total"].sum() or np.nan)
-    pct = counts.div(base, axis=0).mul(100) if by_row else counts.div(base).mul(100)
-    if by_row:
-        # Sobre la fila, el total siempre es 100 %: se muestra la proporción de la fila sobre la tabla.
-        pct["Total"] = counts["Total"].div(counts["Total"].sum() or np.nan).mul(100)
-    table = pd.DataFrame({c: [cell_text(n, p) for n, p in zip(counts[c], pct[c].fillna(0))] for c in counts.columns},
-                         index=pd.Index([(row_labels or {}).get(r, r) for r in rows], name=row_name))
-    pct.index = table.index
-    return table, counts["Total"], pct[cols]
-
-def mora_separation(data, row_col, col_col, rows, cols, row_name, by_row, base_label, row_labels=None):
-    """Concentración (todas las solicitudes) y mora (solo desembolsadas) por celda, lado a lado."""
-    data = data.dropna(subset=[row_col, col_col])
-    left, right = st.columns(2, gap="medium")
-    table, _, pct = share_table(data, row_col, col_col, rows, cols, row_name, by_row, row_labels)
-    with left:
-        st.caption(f"Concentración: solicitudes (proporción sobre {base_label})")
-        st.dataframe(styled_gradient(table, pct, SHARE_SCALE), width="stretch")
-    desembolsadas = data[data["desembolsado"]]
-    _, totals, _ = share_table(desembolsadas, row_col, col_col, rows, cols, row_name, by_row, row_labels)
-    mora_data = desembolsadas[desembolsadas["con_mora"]]
-    mora_table, mora_totals, mora_pct = share_table(mora_data, row_col, col_col, rows, cols, row_name, by_row, row_labels)
-    rate_col = f"% {mora_label.lower()}"
-    rate = pd.Series(mora_totals.to_numpy() / totals.where(totals > 0).to_numpy() * 100, index=mora_table.index)
-    mora_table.insert(len(mora_table.columns) - 1, "Desembolsadas", [format_int(t) if t else "–" for t in totals])
-    mora_table[rate_col] = [f"{r:.1f}%" if pd.notna(r) else "–" for r in rate]
-    mora_pct[rate_col] = rate
-    with right:
-        st.caption(f"Mora: desembolsadas con {mora_label.lower()} (proporción sobre las desembolsadas con mora de "
-                   f"{base_label}); Desembolsadas es el total de la fila y la última columna su % con {mora_label.lower()}")
-        st.dataframe(styled_gradient(mora_table, mora_pct, MORA_SCALE), width="stretch")
-
-def level_distribution(data, level_col, title):
+def level_distribution(data, level_col, title, key=None):
     """Solicitudes clasificadas en cada nivel (Bajo, Medio, Alto o sin nivel) y la mora de las desembolsadas."""
     levels_ = data[level_col].fillna(SIN_NIVEL)
     order = [l for l in NIVELES + [SIN_NIVEL] if l in NIVELES or levels_.eq(l).any()]
@@ -220,7 +183,7 @@ def level_distribution(data, level_col, title):
                           f"Con {mora_label.lower()}": n_mora, f"% {mora_label.lower()}": n_mora.div(n_des.where(n_des > 0)).mul(100)})
     table.index.name = title
     st.caption("Proporción de solicitudes clasificada en cada nivel; la mora es sobre las desembolsadas")
-    st.dataframe(table.style.apply_index(lambda idx: [NIVEL_COLORS.get(v, "") for v in idx]),
+    st.dataframe(table.style.apply_index(lambda idx: [NIVEL_COLORS.get(v, "") for v in idx]), key=key and f"{key}_niveles",
                  width="stretch", column_config={
                      "Solicitudes": st.column_config.NumberColumn(format="localized"),
                      "Desembolsadas": st.column_config.NumberColumn(format="localized"),
@@ -229,20 +192,22 @@ def level_distribution(data, level_col, title):
                      f"% {mora_label.lower()}": st.column_config.NumberColumn(format="%.1f%%")})
 
 def apetito_matrix(rows, cols, store, key_of, editor_key, row_name, options=NIVELES, colors=NIVEL_COLORS,
-                   row_labels=None):
+                   row_labels=None, col_labels=None):
     """Valor editable de cada celda: nivel (Bajo, Medio, Alto) o decisión en la matriz perfil x vehículo. Va dentro
     del formulario: lo editado se aplica al pulsar «Guardar configuración». Devuelve True si cambió algún valor."""
     shown = {r: (row_labels or {}).get(r, r) for r in rows}
+    shown_cols = {c: (col_labels or {}).get(c, c) for c in cols}
     current = pd.DataFrame([[store.get(key_of(r, c)) for c in cols] for r in rows],
-                           index=pd.Index([shown[r] for r in rows], name=row_name), columns=cols, dtype="object")
+                           index=pd.Index([shown[r] for r in rows], name=row_name),
+                           columns=[shown_cols[c] for c in cols], dtype="object")
     st.caption("Decisión (editable)" if options is DECISION_OPTIONS else "Nivel de apetito (editable)")
     styled = current.style.map(lambda v: colors.get(v, ""))
     edited = st.data_editor(styled, width="stretch", num_rows="fixed", key=editor_key,
-                            column_config={c: st.column_config.SelectboxColumn(c, options=options) for c in cols})
+                            column_config={c: st.column_config.SelectboxColumn(c, options=options) for c in current.columns})
     changed = False
     for r in rows:
         for c in cols:
-            value, key = edited.loc[shown[r], c], key_of(r, c)
+            value, key = edited.loc[shown[r], shown_cols[c]], key_of(r, c)
             new = value if value in options else None
             if store.get(key) != new:
                 changed = True
@@ -256,36 +221,54 @@ def apetito_matrix(rows, cols, store, key_of, editor_key, row_name, options=NIVE
 with st.form("arbol_apetito_form", border=False):
     changed = []
 
-    # 1. Vehículo: una matriz por tipo de crédito, filas rango de valor y columnas licencia/condición.
-    st.markdown("**1. Vehículo: valor a financiar × licencia/condición, por tipo de crédito**")
-    VEH = APETITO[APETITO["Tipo"].isin(PRODUCTIVO_ORDER)].dropna(subset=["Vehículo", "Valor"])
+    # 1. Vehículo: una matriz por segmento y tipo de crédito, filas rango de valor y columnas licencia/condición.
+    st.markdown("**1. Vehículo: valor a financiar × licencia/condición, por segmento y tipo de crédito**")
+    VEH = APETITO[APETITO["Tipo"].isin(PRODUCTIVO_ORDER)].dropna(subset=["Segmento", "Vehículo", "Valor"])
     # Las desembolsadas que no tienen tipo de crédito o licencia/condición válidos no entran en la mora del vehículo.
     des = APETITO["desembolsado"]
     n_des, n_des_veh = int(des.sum()), int(VEH["desembolsado"].sum())
     if n_des_veh < n_des:
         NOTAS.append(f"De {format_int(n_des)} solicitudes desembolsadas, {format_int(n_des - n_des_veh)} no entran en la "
                      f"mora del vehículo: {format_int(int((des & ~APETITO['Tipo'].isin(PRODUCTIVO_ORDER)).sum()))} sin tipo de "
-                     f"crédito, {format_int(int((des & APETITO['Vehículo'].isna()).sum()))} sin licencia o condición válida "
-                     f"y {format_int(int((des & APETITO['Valor'].isna()).sum()))} sin valor a financiar.")
-    if not VEH.empty:
-        for tipo, tab in zip(PRODUCTIVO_ORDER, st.tabs(PRODUCTIVO_ORDER)):
-            with tab:
-                VEH_T = VEH[VEH["Tipo"].eq(tipo)]
-                mora_separation(VEH_T, "Valor", "Vehículo", VALOR_RANGOS, VEHICULO_ORDER, "Valor a financiar", True,
-                                "la fila", VALOR_LABELS)
-                edit_col, dist_col = st.columns(2, gap="medium")
-                with edit_col:
-                    changed.append(apetito_matrix(VALOR_RANGOS, VEHICULO_ORDER, levels["vehiculo"],
-                                   lambda r, c, t=tipo: f"{t} | {r} | {c}",
-                                   f"arbol_apetito_vehiculo_{slug(tipo)}_{filters_key}", "Valor a financiar",
-                                   row_labels=VALOR_LABELS))
-                with dist_col:
-                    level_distribution(VEH_T, "Nivel vehículo", "Nivel vehículo")
-        st.caption("Valor a financiar (valor del vehículo − cuota inicial): quintiles sobre toda la base (V1 los montos "
-                   "más bajos, V5 los más altos), en millones de pesos, sin las solicitudes fuera del alcance del estudio "
-                   "(ver las notas al final de la hoja). Los mismos rangos para productivo y consumo.")
+                     f"crédito, {format_int(int((des & APETITO['Vehículo'].isna()).sum()))} sin licencia o condición válida, "
+                     f"{format_int(int((des & APETITO['Valor'].isna()).sum()))} sin valor a financiar "
+                     f"y {format_int(int((des & APETITO['Segmento'].isna()).sum()))} sin segmento.")
+    # Particular productivo se asume atípico: se muestra, pero se deja constancia de cuántos hay.
+    atipicos = APETITO["Tipo"].eq("Productivo") & APETITO["Licencia"].eq("Particular")
+    if atipicos.any():
+        NOTAS.append(f"{format_int(int(atipicos.sum()))} solicitudes son productivas con licencia particular "
+                     f"({format_int(int((atipicos & des).sum()))} desembolsadas): se consideran un caso atípico.")
+    veh_segments = [s for s in SEGMENT_ORDER if VEH["Segmento"].eq(s).any()]
+    for segment, seg_tab in zip(veh_segments, st.tabs(veh_segments) if veh_segments else []):
+        with seg_tab:
+            # Rangos de valor a financiar del segmento (quintiles dentro del segmento, con los cortes del escenario).
+            V_LABELS = etiquetas(CORTES.get("valor", {}).get(segment), VALOR_RANGOS, 1e6, " M")
+            for tipo, tab in zip(PRODUCTIVO_ORDER, st.tabs(PRODUCTIVO_ORDER)):
+                with tab:
+                    VEH_T = VEH[VEH["Segmento"].eq(segment) & VEH["Tipo"].eq(tipo)]
+                    tabla_key = f"veh_{slug(segment)}_{slug(tipo)}"
+                    # Cada celda como proporción del total de la tabla (no de la fila).
+                    mora_separation(VEH_T, "Valor", "Vehículo", VALOR_RANGOS, VEHICULO_ORDER, "Valor a financiar", False,
+                                    f"los créditos de {tipo.lower()} del segmento", V_LABELS, mora_label=mora_label,
+                                    key=tabla_key)
+                    if tipo == "Productivo":
+                        st.caption("Particular productivo se considera un caso atípico.")
+                    edit_col, dist_col = st.columns(2, gap="medium")
+                    with edit_col:
+                        changed.append(apetito_matrix(VALOR_RANGOS, VEHICULO_ORDER, levels["vehiculo"],
+                                       lambda r, c, s=segment, t=tipo: vehiculo_key(s, t, r, c),
+                                       f"arbol_apetito_vehiculo_{slug(segment)}_{slug(tipo)}_{filters_key}",
+                                       "Valor a financiar", row_labels=V_LABELS))
+                    with dist_col:
+                        level_distribution(VEH_T, "Nivel vehículo", "Nivel vehículo", key=tabla_key)
+    if veh_segments:
+        st.caption("Valor a financiar (valor del vehículo − cuota inicial): quintiles dentro de cada segmento sobre la base "
+                   "del escenario (V1 los montos más bajos, V5 los más altos), en millones de pesos, sin las solicitudes "
+                   "fuera del alcance del estudio (ver las notas al final de la hoja). Los mismos rangos para productivo y "
+                   "consumo dentro de cada segmento. Niveles por defecto: config/apetito_default.json.")
     else:
-        st.warning("No hay solicitudes con tipo de crédito, licencia, condición y valor a financiar para los filtros seleccionados.")
+        st.warning("No hay solicitudes con segmento, tipo de crédito, licencia, condición y valor a financiar para los "
+                   "filtros seleccionados.")
 
     # 2. Perfil: por segmento, filas RIE y columnas decil.
     st.markdown("**2. Perfil: RIE × decil, por segmento**")
@@ -295,15 +278,18 @@ with st.form("arbol_apetito_form", border=False):
     for segment, tab in zip(segments, st.tabs(segments) if segments else []):
         with tab:
             SEG = APETITO[APETITO["Segmento"].eq(segment)].dropna(subset=["RIE", "Percentil"])
-            mora_separation(SEG, "RIE", "Percentil", RIE_ORDER, PERCENTILES, "RIE", False, "el segmento")
+            # Intervalo de acierta de cada decil en el segmento, con los registros filtrados.
+            P_LABELS = etiquetas(CORTES.get("acierta", {}).get(segment), PERCENTILES)
+            mora_separation(SEG, "RIE", "Percentil", RIE_ORDER, PERCENTILES, "RIE", False, "el segmento",
+                            col_labels=P_LABELS, mora_label=mora_label)
             edit_col, dist_col = st.columns(2, gap="medium")
             with edit_col:
                 changed.append(apetito_matrix(RIE_ORDER, PERCENTILES, levels["perfil"],
                                lambda r, c, s=segment: f"{s} | {r} | {c}",
-                               f"arbol_apetito_perfil_{slug(segment)}_{filters_key}", "RIE"))
+                               f"arbol_apetito_perfil_{slug(segment)}_{filters_key}", "RIE", col_labels=P_LABELS))
             with dist_col:
                 level_distribution(SEG, "Nivel perfil", "Nivel perfil")
-    st.caption("P10 a P100: deciles calculados dentro de cada segmento; P10 es el 10 % con el valor más bajo. "
+    st.caption("P10 a P100: deciles calculados dentro de cada segmento sobre la base del escenario; P10 es el 10 % con el valor más bajo; junto a cada decil, su intervalo de acierta. "
                "Los créditos sin dato para el decil o sin RIE calculable no aparecen. Niveles por defecto: "
                "config/apetito_default.json, iguales para todos los segmentos.")
 
@@ -314,7 +300,7 @@ with st.form("arbol_apetito_form", border=False):
             st.caption("Filas: nivel perfil · columnas: nivel vehículo")
             TIPO = APETITO[APETITO["Tipo"].eq(tipo)]
             mora_separation(TIPO, "Nivel perfil", "Nivel vehículo", NIVELES, NIVELES, "Perfil", False,
-                            f"los créditos de {tipo.lower()}")
+                            f"los créditos de {tipo.lower()}", mora_label=mora_label)
             edit_col, _ = st.columns(2, gap="medium")
             with edit_col:
                 changed.append(apetito_matrix(NIVELES, NIVELES, levels["matriz"], lambda r, c, t=tipo: f"{t} | {r} | {c}",
@@ -330,17 +316,23 @@ with st.form("arbol_apetito_form", border=False):
                "en un archivo usa «Guardar como nueva versión» en la barra lateral.")
     st.form_submit_button("Guardar configuración", type="primary")
 # Los colores y las tablas de niveles salen de lo guardado: tras guardar se dibuja la hoja una vez más.
+# El escenario se guarda con sus filtros y con los cortes con que se editó.
 if any(changed):
+    levels["cortes"] = levels.get("cortes") or CORTES
+    apetito_escenarios()[ESC_CLAVE] = levels
     st.rerun()
 
 # 4. Distribución de la decisión de la matriz (antes de mitigantes) por tipo de crédito.
-st.markdown("**4. Distribución de la decisión por tipo de crédito: solicitudes vs. desembolsadas**")
+st.markdown("**4. Distribución de la decisión por tipo de crédito: "
+            + ("desembolsadas**" if ES_DESEMBOLSOS else "solicitudes vs. desembolsadas**"))
 DIST = APETITO[APETITO["Combinación"].notna()].copy()
 DIST["Decisión"] = DIST["Combinación"].map(levels["matriz"]).fillna(SIN_DECISION)
 dist_labels = DECISION_OPTIONS + ([SIN_DECISION] if DIST["Decisión"].eq(SIN_DECISION).any() else [])
 # Una barra por tipo con todas las solicitudes y otra solo con las desembolsadas, para comparar la decisión
 # propuesta con lo que efectivamente se desembolsó.
-BASES = {"Solicitudes": pd.Series(True, index=DIST.index), "Desembolsadas": DIST["desembolsado"]}
+# En la base Desembolsos todas son desembolsadas: la barra de solicitudes repetiría la misma.
+BASES = {"Desembolsadas": DIST["desembolsado"]} if ES_DESEMBOLSOS else {
+    "Solicitudes": pd.Series(True, index=DIST.index), "Desembolsadas": DIST["desembolsado"]}
 rows = [(f"{tipo} · {base}", DIST[DIST["Tipo"].eq(tipo) & mask]) for tipo in PRODUCTIVO_ORDER for base, mask in BASES.items()]
 dist = pd.DataFrame({name: d["Decisión"].value_counts().reindex(dist_labels, fill_value=0) for name, d in rows if len(d)}).T
 if dist.empty:

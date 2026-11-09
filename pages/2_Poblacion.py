@@ -48,11 +48,15 @@ def canonical_occupation(value):
         return pd.NA
     return canonical.get(" ".join(str(value).split()).casefold(), str(value).strip())
 
+def canonical_series(series):
+    """canonical_occupation una vez por ocupación distinta, no por registro."""
+    return series.map({v: canonical_occupation(v) for v in series.dropna().unique()})
+
 TITULARES_AVALISTA = list(OCUPACIONES_POR_AVALISTA.values())
 
 st.markdown('<h3 class="section-title">Ocupaciones por segmento</h3>', unsafe_allow_html=True)
 if "descripcion_ocupacion" in filtered.columns and not filtered.empty:
-    occ = filtered.assign(ocupacion=filtered["descripcion_ocupacion"].map(canonical_occupation))
+    occ = filtered.assign(ocupacion=canonical_series(filtered["descripcion_ocupacion"]))
     occ_table = (occ.groupby(["segmentacion", "ocupacion"]).size()
                  .rename("Créditos").reset_index()
                  .sort_values(["segmentacion", "Créditos"], ascending=[True, False]))
@@ -79,8 +83,8 @@ if aval_col not in filtered.columns:
     )
 else:
     tit = filtered.assign(
-        titular=filtered["descripcion_ocupacion"].map(canonical_occupation),
-        avalista=filtered[aval_col].map(canonical_occupation).fillna("Sin avalista / sin dato"),
+        titular=canonical_series(filtered["descripcion_ocupacion"]),
+        avalista=canonical_series(filtered[aval_col]).fillna("Sin avalista / sin dato"),
     )
     tit = tit[tit["titular"].isin(TITULARES_AVALISTA)]
     if tit.empty:
