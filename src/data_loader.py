@@ -13,6 +13,8 @@ OCUPACION_AVAL_PATH = ROOT / "config" / "ocupacion_aval.json"
 CODIGOS_SOLICITUD_PATH = ROOT / "config" / "codigos_solicitud.json"
 AVALISTA1_OCUPACION_CODIGO = "Avalista1Ocupacion"
 OCUPACION_AVALISTA1 = "Ocupacion_avalista1"
+# Ocupación del avalista (deudor JA1) desde Gaviota (Dim_Sol_Persona_Natural), ya en texto; ver generacion_base.
+OCUPACION_AVALISTA_GAVIOTA = "ocupacion_avalista"
 # Nombres canónicos de columnas que la fuente ha entregado con distinto uso de mayúsculas.
 CANONICAL_COLUMNS = ["Frank", "FGA", "FrankDecision", "PlanFinanciacion"]
 MORA_MAX_15M = "mora_max_15m"
@@ -50,18 +52,32 @@ def load_data():
     df = df.rename(columns=rename)
     return normalize_solicitudes(df) if "Ocupacion" in df.columns else df
 
+def _por_valor(series, func):
+    """func aplicada una vez por valor distinto (no por registro); los vacíos quedan vacíos."""
+    unicos = pd.unique(series.dropna())
+    return series.map(dict(zip(unicos, (func(v) for v in unicos))))
+
 def _codes(series, mapping):
     """Traduce códigos (5, 5.0 o "5") con mapping; los valores que ya vienen en texto se conservan y los
     códigos sin mapeo quedan visibles como "Código N sin mapeo"."""
     text = series.astype("string").str.strip()
     codes = pd.to_numeric(text, errors="coerce").astype("Int64").astype("string")
-    unmapped = codes.map(lambda c: f"Código {c} sin mapeo" if pd.notna(c) else pd.NA).astype("string")
+    unmapped = _por_valor(codes, lambda c: f"Código {c} sin mapeo").astype("string")
     return codes.map(mapping).astype("string").fillna(unmapped).fillna(text.where(codes.isna()))
 
 def normalize_solicitudes(df):
     """Lleva la base de solicitudes a los nombres y formatos del simulador."""
     df = df.drop(columns=[c for c in SOLICITUD_DROP if c in df.columns])
-    df = df.rename(columns={k: v for k, v in SOLICITUD_COLUMNS.items() if k in df.columns})
+    # Si la base ya trae la columna destino (por ejemplo, de desembolsos), se prioriza el valor de la
+    # solicitud y se completa con el existente, en lugar de dejar dos columnas con el mismo nombre.
+    for origen, destino in SOLICITUD_COLUMNS.items():
+        if origen not in df.columns:
+            continue
+        if destino in df.columns:
+            df[destino] = df[origen].combine_first(df[destino])
+            df = df.drop(columns=[origen])
+        else:
+            df = df.rename(columns={origen: destino})
     with open(OCUPACION_AVAL_PATH, encoding="utf-8") as f:
         ocupaciones = json.load(f)
     with open(CODIGOS_SOLICITUD_PATH, encoding="utf-8") as f:
@@ -116,7 +132,7 @@ def map_ocupacion_avalista1(df):
         mapping = json.load(f)
     # El código puede llegar como 5, 5.0 o "5"; los códigos sin mapeo quedan visibles.
     codes = pd.to_numeric(df[source], errors="coerce").astype("Int64").astype("string")
-    df[OCUPACION_AVALISTA1] = codes.map(lambda c: mapping.get(c, f"Código {c} sin mapeo") if pd.notna(c) else pd.NA)
+    df[OCUPACION_AVALISTA1] = _por_valor(codes, lambda c: mapping.get(c, f"Código {c} sin mapeo"))
     return df
 
 # Ocupaciones del titular que no están en config/segmentacion.json y toman el segmento
@@ -124,19 +140,29 @@ def map_ocupacion_avalista1(df):
 OCUPACIONES_POR_AVALISTA = {"ama de casa": "Ama de Casa", "universitario": "Universitario"}
 SEGMENTO_SIN_AVALISTA = "Independiente Informal"
 
+def ocupacion_avalista(df):
+    """Ocupación del avalista en texto: la de Gaviota (ocupacion_avalista) y, donde no venga, la del avalista 1
+    de la solicitud (Ocupacion_avalista1). Si Gaviota la entrega como código, se traduce con config/ocupacion_aval.json."""
+    def texto(col):
+        s = df[col] if col in df.columns else pd.Series(pd.NA, index=df.index)
+        return s.astype("string").str.strip().replace("", pd.NA)
+    gaviota = texto(OCUPACION_AVALISTA_GAVIOTA)
+    if gaviota.notna().any():
+        with open(OCUPACION_AVAL_PATH, encoding="utf-8") as f:
+            gaviota = _codes(gaviota, json.load(f)).replace("", pd.NA)
+    return gaviota.fillna(texto(OCUPACION_AVALISTA1))
+
 def segmentacion_final(df, mapping):
     """1. Segmento de descripcion_ocupacion según config/segmentacion.json.
-    2. Ama de Casa y Universitario toman el segmento de la ocupación del avalista 1
-       (código traducido con config/ocupacion_aval.json).
+    2. Ama de Casa y Universitario toman el segmento de la ocupación del avalista: la de Gaviota
+       (ocupacion_avalista) y, si no viene, la del avalista 1 de la solicitud (código traducido con
+       config/ocupacion_aval.json).
     2.1 Si el avalista no tiene segmento (Ama de Casa, Universitario, sin avalista o sin dato),
         el titular queda en Independiente Informal.
     El resto de ocupaciones sin segmento queda como 'Sin dato'."""
-    titular = df["descripcion_ocupacion"].map(lambda x: _norm(x) if pd.notna(x) else "")
-    segmento = titular.map(lambda x: mapping.get(x, "Sin dato"))
-    if OCUPACION_AVALISTA1 in df.columns:
-        segmento_aval = df[OCUPACION_AVALISTA1].map(lambda x: mapping.get(_norm(x)) if pd.notna(x) else None)
-    else:
-        segmento_aval = pd.Series(None, index=df.index, dtype="object")
+    titular = _por_valor(df["descripcion_ocupacion"], _norm).fillna("")
+    segmento = _por_valor(titular, lambda x: mapping.get(x, "Sin dato"))
+    segmento_aval = _por_valor(ocupacion_avalista(df), lambda x: mapping.get(_norm(x)))
     por_avalista = titular.isin(OCUPACIONES_POR_AVALISTA) & segmento.eq("Sin dato")
     return segmento.where(~por_avalista, segmento_aval.fillna(SEGMENTO_SIN_AVALISTA))
 
@@ -175,7 +201,15 @@ def clean_data(df):
 # (ValorVh - MontoCtaInicial) mayor a MAX_FINANCIACION o menor a MIN_FINANCIACION (incluye los negativos).
 # df.attrs guarda cuántas se omitieron; exclusion_notes las describe para las notas de las hojas.
 MAX_FINANCIACION = 180_000_000
+# Mínimo de 10 millones (antes 1).
 MIN_FINANCIACION = 10_000_000
+# Por instrucción del usuario, por ahora solo se estudian créditos vehiculares: se omiten los de categoría
+# Libre inversión (columna categoria de master_desembolsos; sin tildes ni mayúsculas para comparar).
+CATEGORIAS_EXCLUIDAS = {"libre inversion"}
+
+def _sin_tildes(series):
+    return (series.astype("string").str.strip().str.casefold()
+            .str.normalize("NFKD").str.encode("ascii", "ignore").str.decode("ascii"))
 
 def prepare_data(df, incluir_sin_dato=False):
     df = clean_data(df)
@@ -186,6 +220,13 @@ def prepare_data(df, incluir_sin_dato=False):
     df.attrs["excluidas_financiacion"] = int(alta.sum())
     df.attrs["excluidas_financiacion_baja"] = int(baja.sum())
     df.attrs["excluidas_financiacion_negativa"] = int(financiar.lt(0).fillna(False).sum())
+    # La categoría solo viene en los desembolsos: las solicitudes no desembolsadas no se pueden identificar.
+    # Por instrucción del usuario, por ahora no se informa en las notas cuántos se excluyen.
+    if "categoria" in df.columns:
+        libre = _sin_tildes(df["categoria"]).isin(CATEGORIAS_EXCLUIDAS).fillna(False)
+        attrs = dict(df.attrs)
+        df = df[~libre].copy()
+        df.attrs.update(attrs)
     if "id_fecha_desembolso" in df.columns:
         raw = df["id_fecha_desembolso"].astype("string").str.replace(r"\.0$", "", regex=True)
         df["fecha_desembolso"] = pd.to_datetime(raw, format="%Y%m%d", errors="coerce")
@@ -195,12 +236,13 @@ def prepare_data(df, incluir_sin_dato=False):
     observados_col = next((c for c in ["meses_observados", "ventana"] if c in df.columns), None)
     if "fecha_desembolso" in df.columns and observados_col:
         # La fecha de corte no viene en la base: es el último mes observado de cualquier crédito.
-        mes_desembolso = df["fecha_desembolso"].dt.to_period("M")
+        # Meses como número (año * 12 + mes) para restar sin recorrer registro por registro.
+        mes_desembolso = df["fecha_desembolso"].dt.year * 12 + df["fecha_desembolso"].dt.month
         observados = pd.to_numeric(df[observados_col], errors="coerce")
         corte = (mes_desembolso + observados.fillna(0).astype(int)).max()
         # Meses de vida desde el desembolso; a diferencia de meses_observados, no se reduce
         # cuando el crédito se cancela antes de completar la ventana.
-        df["meses_vida"] = (corte - mes_desembolso).map(lambda d: d.n if pd.notna(d) else pd.NA).astype("Int64")
+        df["meses_vida"] = (corte - mes_desembolso).astype("Int64")
     if "mes_desem" in df.columns:
         df["mes_desem"] = pd.to_numeric(df["mes_desem"], errors="coerce").astype("Int64")
     if "licencia_vehiculo" in df.columns:
@@ -224,6 +266,11 @@ def prepare_data(df, incluir_sin_dato=False):
     # Los gráficos segmentan por perfil_label, que corresponde a la segmentación.
     df["perfil_label"] = df["segmentacion"]
     return df
+
+@st.cache_data(show_spinner="Preparando la base…", max_entries=2)
+def base_preparada(incluir_sin_dato=False):
+    """prepare_data(load_data()) en caché: se calcula una vez por sesión del servidor y no en cada clic."""
+    return prepare_data(load_data(), incluir_sin_dato)
 
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 
@@ -259,6 +306,6 @@ def exclusion_notes(attrs):
     if attrs.get("excluidas_financiacion_baja"):
         neg = attrs.get("excluidas_financiacion_negativa", 0)
         notas.append(f"Se omiten {fmt(attrs['excluidas_financiacion_baja'])} solicitudes con valor a financiar menor a "
-                     f"{fmt(MIN_FINANCIACION / 1e6)} millones" + (f", de ellas {fmt(neg)} con valor negativo "
+                     f"{fmt(MIN_FINANCIACION / 1e6)} {'millón' if MIN_FINANCIACION == 1e6 else 'millones'}" + (f", de ellas {fmt(neg)} con valor negativo "
                      "(cuota inicial mayor que el valor del vehículo)" if neg else "") + ".")
     return notas
