@@ -1,14 +1,17 @@
 """Parámetros editables compartidos entre hojas y sus versiones.
 
 Una versión reúne todo lo editable: parámetros RIE, decisión por rama del árbol anterior, niveles de
-apetito de la hoja Apetito (perfil, vehículo y matriz por productivo/consumo) y mitigantes exigidos en Mitigantes, porque dependen entre sí (el RIE define las ramas que reciben decisión).
+apetito de la hoja Apetito por escenario (perfil, vehículo y matriz por productivo/consumo) y mitigantes exigidos en Mitigantes, porque dependen entre sí (el RIE define las ramas que reciben decisión).
 
-- Al iniciar la sesión se carga INITIAL_VERSION (hoy na_v4) o, si no existe, la versión 1
-  (config/versiones/base_v1.json), que no se modifica.
+- Al iniciar la sesión se carga INITIAL_VERSION (hoy la versión 1, config/versiones/base_v1.json) o, si no
+  existe, la versión 1. La versión 1 trae el RIE, el apetito por defecto de Solicitudes y Desembolsos y los
+  mitigantes (hoy sin asignar); la app no la modifica.
 - Lo editado vive en st.session_state con claves propias (no las de los widgets, que Streamlit
   borra al cambiar de hoja), así que se aplica en todas las hojas durante la sesión.
 - «Guardar como nueva versión» crea config/versiones/<usuario>_v<N>.json; nunca sobrescribe otro
   archivo, de modo que varios usuarios pueden guardar a la vez sin pisarse.
+- «Actualizar versión» reescribe la versión activa con lo aplicado en la sesión; solo su autor puede hacerlo y
+  la versión 1 no se actualiza.
 - Cada usuario solo elimina sus propias versiones; la versión 1 no se elimina.
 """
 import copy
@@ -27,7 +30,7 @@ from src.rie import DEFAULT_PARAMS
 VERSIONS_DIR = ROOT / "config" / "versiones"
 BASE_VERSION = "base_v1"
 # Versión que se carga al abrir la app (por instrucción del usuario); si el archivo no existe, se usa la base.
-INITIAL_VERSION = "na_v4"
+INITIAL_VERSION = BASE_VERSION
 APROBADO, CONDICIONES, A_ESTUDIO = "Aprobado", "Condiciones", "A estudio"
 DECISION_OPTIONS = [APROBADO, CONDICIONES, A_ESTUDIO]
 # Mitigantes exigibles por rama (1/0); el FGA respalda la garantía.
@@ -37,6 +40,8 @@ MITIGANTES = ("avalista", "garantia", "fga", "desistir")
 # la matriz perfil x vehículo lleva una decisión de DECISION_OPTIONS.
 NIVELES = ["Bajo", "Medio", "Alto"]
 APETITO_MATRICES = ("perfil", "vehiculo", "matriz")
+GENERAL_ESCENARIO = "general"
+DESEMBOLSOS_ESCENARIO = "Desembolsos"
 
 RIE_STATE = "rie_parametros"
 ARBOL_DECISION_STATE = "arbol_decisiones"
@@ -106,12 +111,36 @@ def load_version(name):
         "arbol": {k: v for k, v in arbol.items() if v in DECISION_OPTIONS},
         "mitigantes": {k: {m: int(bool(v.get(m, 0))) for m in MITIGANTES}
                        for k, v in mitigantes.items() if isinstance(v, dict)},
-        # Las versiones anteriores no traen apetito: quedan sin niveles asignados.
-        # Perfil y vehículo llevan nivel (Bajo/Medio/Alto); la matriz lleva decisión.
-        "apetito": {m: {k: v for k, v in (apetito.get(m) or {}).items()
-                        if v in (DECISION_OPTIONS if m == "matriz" else NIVELES)}
-                    for m in APETITO_MATRICES},
+        # Apetito por escenario (src/escenarios.py). Las versiones anteriores traen una sola configuración:
+        # se cargan como escenario general; las que no traen apetito quedan sin niveles asignados.
+        "apetito": {"escenarios": load_escenarios(apetito)},
     }
+
+def _niveles(raw):
+    """Perfil y vehículo llevan nivel (Bajo/Medio/Alto); la matriz lleva decisión."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {m: {k: v for k, v in (raw.get(m) or {}).items() if v in (DECISION_OPTIONS if m == "matriz" else NIVELES)}
+            for m in APETITO_MATRICES}
+
+def load_escenarios(apetito):
+    escenarios = apetito.get("escenarios") if isinstance(apetito.get("escenarios"), dict) else None
+    if escenarios is None:
+        escenarios = {GENERAL_ESCENARIO: {**apetito, "filtros": {"base": "Solicitudes"}}}
+    out = {}
+    for clave, esc in escenarios.items():
+        if not isinstance(esc, dict):
+            continue
+        filtros = esc.get("filtros") if isinstance(esc.get("filtros"), dict) else {"base": "Solicitudes"}
+        cortes = esc.get("cortes") if isinstance(esc.get("cortes"), dict) else {}
+        # Cortes anteriores con el valor a financiar sobre toda la base (no por segmento): se recalculan.
+        if any(not isinstance(v, dict) for v in (cortes.get("valor") or {}).values()):
+            cortes = {}
+        out[str(clave)] = {"filtros": {str(k): str(v) for k, v in filtros.items()}, "cortes": cortes, **_niveles(esc)}
+    # Las dos bases (Solicitudes y Desembolsos, sin otros filtros) siempre tienen escenario: si la versión no lo trae,
+    # queda vacío y seed_defaults (src/escenarios.py, sembrar) lo llena con config/apetito_default.json.
+    out.setdefault(GENERAL_ESCENARIO, {"filtros": {"base": "Solicitudes"}, "cortes": {}, **_niveles({})})
+    out.setdefault(DESEMBOLSOS_ESCENARIO, {"filtros": {"base": "Desembolsos"}, "cortes": {}, **_niveles({})})
+    return out
 
 def list_versions():
     """Versión 1 primero y luego las de los usuarios, de la más reciente a la más antigua."""
@@ -172,6 +201,23 @@ def save_version(user, note):
         except FileExistsError:
             n += 1
 
+def can_update(name, user):
+    """True si user es el autor de la versión name y no es la versión 1."""
+    meta = read_json(version_path(name)).get("meta", {})
+    return (name != BASE_VERSION and version_path(name).exists() and bool(user_slug(user))
+            and user_slug(meta.get("usuario", "")) == user_slug(user))
+
+def update_version(name, user, note=""):
+    """Reescribe la versión name con la sesión (escritura atómica). Conserva el autor y la versión de origen;
+    actualiza la fecha y, si se escribe, la nota. Devuelve False si user no puede actualizarla."""
+    if not can_update(name, user):
+        return False
+    meta = read_json(version_path(name)).get("meta", {})
+    meta = {**meta, "fecha": datetime.now().isoformat(timespec="seconds"),
+            "nota": note.strip() or meta.get("nota", "")}
+    write_json(version_path(name), {"meta": meta, **snapshot()})
+    return True
+
 def delete_version(name, user):
     meta = read_json(version_path(name)).get("meta", {})
     if name == BASE_VERSION or user_slug(meta.get("usuario", "")) != user_slug(user):
@@ -197,10 +243,14 @@ def arbol_decisions():
     ensure_session()
     return st.session_state[ARBOL_DECISION_STATE]
 
-def apetito_levels():
-    """Niveles de apetito de la sesión: {"perfil": {...}, "vehiculo": {...}, "matriz": {...}}."""
+def apetito_escenarios():
+    """Escenarios de apetito de la sesión (src/escenarios.py): {clave: {filtros, cortes, perfil, vehiculo, matriz}}."""
     ensure_session()
-    return st.session_state[APETITO_STATE]
+    return st.session_state[APETITO_STATE]["escenarios"]
+
+def apetito_levels():
+    """Niveles del escenario general: {"perfil": {...}, "vehiculo": {...}, "matriz": {...}, ...}."""
+    return apetito_escenarios()[GENERAL_ESCENARIO]
 
 def mitigante_conditions():
     """Mitigantes exigidos por rama de la sesión (versión activa más lo editado en la hoja Mitigantes)."""
@@ -272,6 +322,16 @@ def version_sidebar():
             st.session_state[ACTIVE_STATE] = name
             st.session_state.pop("ver_nota", None)
             reload(f"Guardada como {name}.")
-        st.caption("Incluye los parámetros RIE, las matrices de apetito y decisión de la hoja Apetito y los mitigantes por "
+        # Actualizar: reescribe la versión activa (solo su autor; la versión 1 no). Pide confirmación.
+        updatable = can_update(active, user)
+        with st.popover(f"Actualizar {active}", width="stretch", disabled=not (updatable and pending),
+                        help="Reescribe la versión activa con lo aplicado en la sesión. Solo el autor puede "
+                             "actualizarla, la versión 1 no se actualiza y debe haber cambios sin guardar."):
+            st.warning(f"¿Reemplazar el contenido de {active} con lo aplicado en la sesión? No se puede deshacer.")
+            if st.button("Sí, actualizar", key="ver_actualizar", type="primary", width="stretch"):
+                update_version(active, user, note)
+                st.session_state.pop("ver_nota", None)
+                reload(f"Versión {active} actualizada.")
+        st.caption("Incluye los parámetros RIE, las matrices de apetito y decisión de la hoja Apetito de cada escenario (con sus rangos y deciles) y los mitigantes por "
                    "combinación y por detalle, tal como estén aplicados: lo editado en un formulario sin pulsar su botón "
                    "de guardar no se incluye.")
